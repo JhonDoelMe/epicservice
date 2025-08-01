@@ -1,118 +1,193 @@
 import asyncio
 import logging
 import os
-
 import pandas as pd
+
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.client.default import DefaultBotProperties # <-- 1. НОВЫЙ ИМПОРТ
-from aiogram.filters import CommandStart
+from aiogram.client.default import DefaultBotProperties
+from aiogram.filters import CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from dotenv import load_dotenv
 
 # --- Конфигурация ---
-# Загружаем переменные окружения из .env файла
 load_dotenv()
-
-# Получаем токен бота и путь к файлу
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CSV_FILE_PATH = "data.csv"
-
-# Настраиваем логирование для отладки
 logging.basicConfig(level=logging.INFO)
 
-# --- Инициализация бота и диспетчера ---
-# Используем новый способ установки parse_mode
-# <-- 2. ИЗМЕНЕННАЯ СТРОКА
+# --- Инициализация ---
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
 dp = Dispatcher()
 
+# Словарь для хранения временных списков пользователей
+user_lists = {}
 
-# --- Основная логика поиска ---
+# --- Машина состояний (FSM) для ожидания количества ---
+class Form(StatesGroup):
+    waiting_for_quantity = State()
+
+# --- Клавиатуры ---
+main_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="Новий список"), KeyboardButton(text="Мій список")]
+    ],
+    resize_keyboard=True
+)
+
+# --- Логика поиска в файле ---
 def find_product_by_article(article_number: str) -> dict | None:
-    """
-    Ищет товар по артикулу в CSV-файле.
-    Возвращает словарь с данными о товаре или None, если ничего не найдено.
-    """
     try:
-        # Читаем CSV файл, указав правильный разделитель - точку с запятой
         df = pd.read_csv(CSV_FILE_PATH, delimiter=';')
-        
-        # Приводим колонку 'артикул' к строковому типу для надежного сравнения
         df['артикул'] = df['артикул'].astype(str)
-        
-        # Ищем строку, где значение в колонке 'артикул' совпадает с запрошенным
         result_row = df[df['артикул'] == article_number]
-        
-        # Если найдена хотя бы одна строка
         if not result_row.empty:
-            # Возвращаем первую найденную строку в виде словаря
             return result_row.iloc[0].to_dict()
-            
-    except FileNotFoundError:
-        logging.error(f"Файл не найден по пути: {CSV_FILE_PATH}")
-        return None
     except Exception as e:
-        logging.error(f"Произошла ошибка при чтении файла или поиске: {e}")
+        logging.error(f"Ошибка при поиске в файле: {e}")
         return None
-        
-    # Если ничего не найдено, возвращаем None
     return None
 
+# --- Обработчики основных команд ---
 
-# --- Обработчики сообщений (хендлеры) ---
-
-# Обработчик команды /start
 @dp.message(CommandStart())
-async def send_welcome(message: types.Message):
-    """Отправляет приветственное сообщение в ответ на команду /start."""
+async def send_welcome(message: Message):
+    """Отправляет приветствие и главную клавиатуру."""
     await message.answer(
         "👋 *Вітаю!*\n\n"
-        "Я бот для пошуку товарів за артикулом.\n"
-        "Просто надішліть мені числовий артикул, і я знайду інформацію про товар."
+        "Я бот для пошуку товарів та створення списків.\n"
+        "Використовуйте кнопки нижче або просто надішліть мені артикул.",
+        reply_markup=main_keyboard
     )
 
-# Обработчик сообщений, содержащих только цифры (наш артикул)
+# --- Обработчики для работы со списками ---
+
+@dp.message(F.text == "Новий список")
+async def new_list_handler(message: Message):
+    """Создает новый (пустой) список для пользователя."""
+    user_id = message.from_user.id
+    user_lists[user_id] = {"list": [], "first_article": None}
+    await message.answer("Створено новий порожній список. Тепер шукайте товари та додавайте їх.")
+
+@dp.message(F.text == "Мій список")
+async def my_list_handler(message: Message):
+    """Показывает текущий список пользователя."""
+    user_id = message.from_user.id
+    if user_id not in user_lists or not user_lists[user_id]["list"]:
+        await message.answer("Ваш список порожній. Спочатку створіть новий список і додайте товари.")
+        return
+
+    list_items = user_lists[user_id]["list"]
+    response_lines = ["*Ваш поточний список:*\n"]
+    for i, item in enumerate(list_items, 1):
+        response_lines.append(f"{i}. Артикул: `{item['артикул']}`, Кількість: *{item['кількість']}*")
+    
+    response_text = "\n".join(response_lines)
+    
+    save_button = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💾 Зберегти список у файл", callback_data="save_list")]
+    ])
+    
+    await message.answer(response_text, reply_markup=save_button)
+
+@dp.callback_query(F.data == "save_list")
+async def save_list_callback_handler(callback_query: types.CallbackQuery):
+    """Сохраняет список в Excel и отправляет пользователю."""
+    user_id = callback_query.from_user.id
+    if user_id not in user_lists or not user_lists[user_id]["list"]:
+        await callback_query.message.answer("Список порожній, нічого зберігати.")
+        await callback_query.answer()
+        return
+
+    user_data = user_lists[user_id]
+    df_list = pd.DataFrame(user_data["list"])
+    file_name = f"{str(user_data['first_article'])[:4]}.xlsx"
+    
+    try:
+        # Сохраняем в Excel без заголовка
+        df_list.to_excel(file_name, index=False, header=False) # <-- ИЗМЕНЕНИЕ ЗДЕСЬ
+        
+        document = FSInputFile(file_name)
+        await callback_query.message.answer_document(document, caption=f"Ваш список збережено у файлі: *{file_name}*")
+        
+        del user_lists[user_id]
+        
+    except Exception as e:
+        logging.error(f"Ошибка сохранения файла: {e}")
+        await callback_query.message.answer("Сталася помилка при збереженні файлу.")
+    finally:
+        if os.path.exists(file_name):
+            os.remove(file_name)
+            
+    await callback_query.answer("Список збережено!")
+
+
+# --- Поиск и добавление в список ---
+
+@dp.callback_query(F.data.startswith("add_to_list_"))
+async def add_to_list_callback_handler(callback_query: types.CallbackQuery, state: FSMContext):
+    """Ловит нажатие кнопки 'Добавить в список' и переходит в состояние ожидания количества."""
+    article_to_add = callback_query.data.split("_")[-1]
+    await state.update_data(article_to_add=article_to_add)
+    await state.set_state(Form.waiting_for_quantity)
+    await callback_query.message.answer(f"Введіть кількість для товару з артикулом `{article_to_add}`:")
+    await callback_query.answer()
+
+
+@dp.message(StateFilter(Form.waiting_for_quantity), F.text.isdigit())
+async def process_quantity(message: Message, state: FSMContext):
+    """Получает количество, добавляет товар в список и сбрасывает состояние."""
+    user_id = message.from_user.id
+    quantity = int(message.text)
+    data = await state.get_data()
+    article = data.get("article_to_add")
+    
+    if not article:
+        await message.answer("Сталася помилка. Спробуйте додати товар знову.")
+        await state.clear()
+        return
+        
+    if user_id not in user_lists:
+        user_lists[user_id] = {"list": [], "first_article": None}
+        
+    user_lists[user_id]["list"].append({"артикул": article, "кількість": quantity})
+    
+    if not user_lists[user_id]["first_article"]:
+        user_lists[user_id]["first_article"] = article
+        
+    await message.answer(f"✅ Товар з артикулом `{article}` у кількості *{quantity}* додано до вашого списку.")
+    
+    await state.clear()
+
+
 @dp.message(F.text.isdigit())
-async def search_article_handler(message: types.Message):
-    """Ищет артикул и отправляет результат пользователю."""
-    article_to_find = message.text
-    logging.info(f"Користувач {message.from_user.id} шукає артикул: {article_to_find}")
+async def search_article_handler(message: Message):
+    """Ищет артикул и предлагает добавить в список."""
+    product_data = find_product_by_article(message.text)
     
-    # Ищем товар
-    product_data = find_product_by_article(article_to_find)
-    
-    # Если товар найден
     if product_data:
-        # Формируем красивый ответ
         response_text = (
-            f"✅ *Знайдено товар за артикулом {product_data['артикул']}*\n\n"
+            f"✅ *Знайдено товар*\n\n"
             f"🏢 *Відділ:* {product_data['відділ']}\n"
             f"📂 *Група:* {product_data['група']}\n"
             f"📝 *Назва:* {product_data['назва']}\n"
-            f"📦 *Кількість:* {product_data['кількість']}"
+            f"📦 *Кількість на складі:* {product_data['кількість']}"
         )
-        await message.answer(response_text)
+        add_button = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🛒 Додати в список", callback_data=f"add_to_list_{product_data['артикул']}")]
+        ])
+        await message.answer(response_text, reply_markup=add_button)
     else:
-        # Если товар не найден
-        await message.answer(
-            f"❌ *Товар не знайдено*\n\n"
-            f"На жаль, товар з артикулом `{article_to_find}` відсутній у базі."
-        )
-
-# Обработчик для любого другого текста
-@dp.message()
-async def handle_other_text(message: types.Message):
-    """Сообщает пользователю, что нужно ввести именно число."""
-    await message.answer("Будь ласка, надішліть *тільки числовий артикул* товару.")
+        await message.answer(f"❌ *Товар з артикулом `{message.text}` не знайдено*")
 
 
 # --- Точка входа ---
 async def main():
     """Основная функция для запуска бота."""
     logging.info("Бот запускається...")
-    # Начинаем опрос Telegram на наличие новых сообщений
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    # Запускаем асинхронную функцию main
     asyncio.run(main())
