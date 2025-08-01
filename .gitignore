@@ -24,4 +24,4 @@ __pycache__/
 # data.csv
 data.csv
 data.xlsx
-# data.json
+*.json
