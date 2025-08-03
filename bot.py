@@ -2,8 +2,10 @@ import asyncio
 import logging
 import os
 import pandas as pd
+# Импорты для Mini App
 import json
 import base64
+
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
@@ -53,7 +55,6 @@ def find_product_by_article(article_number: str) -> dict | None:
         logging.error("Переменная GOOGLE_SHEET_URL не задана в .env файле.")
         return None
     try:
-        # Указываем запятую как разделитель
         df = pd.read_csv(GOOGLE_SHEET_URL, delimiter=',')
         df['артикул'] = df['артикул'].astype(str)
         result_row = df[df['артикул'] == article_number]
@@ -113,35 +114,6 @@ async def my_list_handler(message: Message):
         f"У вашому списку *{len(list_data)}* позицій. Натисніть кнопку нижче, щоб переглянути.",
         reply_markup=web_app_keyboard
     )
-
-
-@dp.callback_query(F.data == "save_list")
-async def save_list_callback_handler(callback_query: types.CallbackQuery):
-    """Сохраняет список в Excel и отправляет пользователю."""
-    user_id = callback_query.from_user.id
-    if user_id not in user_lists or not user_lists[user_id]["list"]:
-        await callback_query.message.answer("Список порожній, нічого зберігати.")
-        await callback_query.answer()
-        return
-
-    user_data = user_lists[user_id]
-    df_list = pd.DataFrame(user_data["list"])
-    file_name = f"{str(user_data['first_article'])[:4]}.xlsx"
-
-    try:
-        df_list.to_excel(file_name, index=False, header=False)
-        document = FSInputFile(file_name)
-        await callback_query.message.answer_document(
-            document, caption=f"Ваш список збережено у файлі: *{file_name}*"
-        )
-        del user_lists[user_id]
-    except Exception as e:
-        logging.error(f"Ошибка сохранения файла: {e}")
-        await callback_query.message.answer("Сталася помилка при збереженні файлу.")
-    finally:
-        if os.path.exists(file_name):
-            os.remove(file_name)
-    await callback_query.answer("Список збережено!")
 
 
 # --- Поиск и добавление в список ---
