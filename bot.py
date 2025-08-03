@@ -102,7 +102,7 @@ async def my_list_handler(message: Message):
     list_data_b64 = base64.urlsafe_b64encode(json.dumps(list_data).encode()).decode()
 
     # Формируем URL с вашим доменом и параметром
-    web_app_url = f"https://anubis-ua.pp.ua/bot_app/?start_param={list_data_b64}"
+    web_app_url = f"https://anubis-ua.pp.ua/?start_param={list_data_b64}"
 
     # Создаем кнопку, которая открывает веб-приложение
     web_app_keyboard = InlineKeyboardMarkup(inline_keyboard=[
