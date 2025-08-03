@@ -2,10 +2,8 @@ import asyncio
 import logging
 import os
 import pandas as pd
-# Импорты для Mini App
 import json
 import base64
-
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.client.default import DefaultBotProperties
@@ -89,6 +87,7 @@ async def new_list_handler(message: Message):
     )
 
 
+# !! ЭТОТ БЛОК ИЗМЕНЕН ДЛЯ РАБОТЫ С MINI APP
 @dp.message(F.text == "Мій список")
 async def my_list_handler(message: Message):
     """Показывает кнопку для открытия Mini App со списком."""
@@ -99,7 +98,6 @@ async def my_list_handler(message: Message):
 
     # Готовим данные для передачи в Mini App
     list_data = user_lists[user_id]["list"]
-    # Превращаем данные в JSON, затем в байты, затем в безопасную для URL строку Base64
     list_data_b64 = base64.urlsafe_b64encode(json.dumps(list_data).encode()).decode()
 
     # Формируем URL с вашим доменом и параметром
