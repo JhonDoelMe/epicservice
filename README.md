@@ -55,11 +55,11 @@
     BOT_TOKEN='ВАШ_ТЕЛЕГРАМ_ТОКЕН'
 
     # Налаштування бази даних PostgreSQL
-    DB_USER='postgres'
+    DB_USER='користувач'
     DB_PASS='ВАШ_ПАРОЛЬ'
     DB_HOST='localhost'
     DB_PORT='5432'
-    DB_NAME='epicbot'
+    DB_NAME='ім'я бази'
 
     # Telegram ID адміністраторів через кому
     ADMIN_IDS='ВАШ_ID,ID_ІНШОГО_АДМІНА'
