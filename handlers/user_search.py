@@ -1,23 +1,22 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
-
 from database.orm import orm_find_products, orm_get_product_by_id
 from keyboards.inline import get_search_results_kb, get_add_to_list_kb
 
 router = Router()
 
-# Додаємо фільтр, щоб цей обробник не реагував на текст кнопок
 @router.message(F.text.as_("text"))
 async def search_handler(message: Message, text: str):
     """Обробляє текстові повідомлення як пошукові запити."""
-    # Ігноруємо команди та занадто короткі запити
-    if text.startswith('/') or len(text) < 4:
-        return
-    
-    # Перевіряємо, чи текст не є однією з наших команд-кнопок
     known_commands = ["Новий список", "Мій список", "🗂️ Архів списків", "👑 Адмін-панель"]
-    if text in known_commands:
+    if text.startswith('/') or text in known_commands:
         return
+
+    # --- НОВА ЛОГІКА: Перевірка довжини запиту ---
+    if len(text) < 5:
+        await message.answer("⚠️ Будь ласка, введіть для пошуку не менше 5 символів.")
+        return
+    # ---------------------------------------------
 
     products = await orm_find_products(text)
     
@@ -26,8 +25,7 @@ async def search_handler(message: Message, text: str):
         return
     
     if len(products) == 1:
-        product = products[0]
-        await show_product_card(message, product)
+        await show_product_card(message, products[0])
     else:
         await message.answer(
             "Знайдено кілька варіантів. Будь ласка, оберіть потрібний:",
