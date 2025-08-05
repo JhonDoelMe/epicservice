@@ -28,3 +28,21 @@ def get_archive_kb(user_id: int, is_admin_view: bool = False):
     if is_admin_view:
         keyboard.append([InlineKeyboardButton(text="⬅️ Назад до списку користувачів", callback_data="admin:user_archives")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_search_results_kb(products: list):
+    """Створює клавіатуру з результатами пошуку, використовуючи ID товару."""
+    keyboard = []
+    for product in products:
+        button_text = f"{product.назва[:50]}..." if len(product.назва) > 50 else product.назва
+        keyboard.append([
+            InlineKeyboardButton(text=button_text, callback_data=f"product:{product.id}")
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def get_add_to_list_kb(product_id: int):
+    """Створює кнопку 'Додати до списку', використовуючи ID товару."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🛒 Додати до списку", callback_data=f"add_to_list:{product_id}")]
+        ]
+    )
