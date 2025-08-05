@@ -3,102 +3,87 @@ import pandas as pd
 from sqlalchemy import delete, select, or_, update
 
 from database.engine import async_engine, sync_session, async_session
-from database.models import Base, Product
+from database.models import Base, Product, SavedList, SavedListItem
 
 async def create_tables():
-    """Створює таблиці в базі даних, якщо їх не існує."""
+    """Створює всі таблиці в базі даних."""
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+# --- Функції імпорту (без змін) ---
 def _sync_smart_import(file_path: str):
-    """
-    ПОВНІСТЮ СИНХРОННА функція для обробки файлу та запису в БД.
-    """
     try:
         df = pd.read_excel(file_path)
-        
         expected_columns_short = ['в', 'г', 'н', 'к']
         if list(df.columns) != expected_columns_short:
-            expected_str = ", ".join(expected_columns_short)
-            return f"❌ Помилка: назви колонок у файлі неправильні.\n\nОчікується: `{expected_str}`"
-
+            return f"❌ Помилка: назви колонок неправильні. Очікується: `в, г, н, к`"
         df.rename(columns={'в': 'відділ', 'г': 'група', 'н': 'назва', 'к': 'кількість'}, inplace=True)
-
-        products_to_add = []
-        for _, row in df.iterrows():
-            if pd.isna(row['назва']) or pd.isna(row['відділ']):
-                continue
-            products_to_add.append(
-                Product(
-                    назва=str(row['назва']),
-                    відділ=int(row['відділ']),
-                    група=str(row['група']),
-                    кількість=str(row['кількість'])
-                )
-            )
-
+        products_to_add = [Product(**row.to_dict()) for _, row in df.iterrows() if pd.notna(row['назва']) and pd.notna(row['відділ'])]
         with sync_session() as session:
             session.execute(delete(Product))
             session.add_all(products_to_add)
             session.commit()
-        
-        return f"✅ Імпорт успішно завершено!\nДодано товарів: {len(products_to_add)}"
-
+        return f"✅ Імпорт завершено! Додано товарів: {len(products_to_add)}"
     except Exception as e:
-        return f"❌ Сталася помилка під час імпорту: {str(e)}"
+        return f"❌ Сталася помилка: {str(e)}"
 
 async def orm_smart_import(file_path: str):
-    """
-    Асинхронна обгортка, яка викликає синхронну функцію в окремому потоці.
-    """
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, _sync_smart_import, file_path)
-    return result
+    return await loop.run_in_executor(None, _sync_smart_import, file_path)
 
+# --- Функції пошуку (без змін) ---
 async def orm_find_products(search_query: str):
-    """
-    Виконує пошук товарів у базі даних за частковим збігом в назві.
-    """
     async with async_session() as session:
-        query = (
-            select(Product)
-            .where(Product.назва.ilike(f'%{search_query}%'))
-            .limit(15)
-        )
+        query = select(Product).where(Product.назва.ilike(f'%{search_query}%')).limit(15)
         result = await session.execute(query)
         return result.scalars().all()
 
 async def orm_get_product_by_id(product_id: int):
-    """Знаходить один товар за його ID."""
     async with async_session() as session:
-        query = select(Product).where(Product.id == product_id)
-        result = await session.execute(query)
-        return result.scalar_one_or_none()
+        return await session.get(Product, product_id)
 
+# --- Функції резервування (без змін) ---
 async def orm_update_reserved_quantity(items: list):
-    """
-    Оновлює поле 'відкладено' для товарів у списку.
-    Приймає список словників: [{'product_id': id, 'quantity': count}]
-    """
     async with async_session() as session:
         for item in items:
-            query = select(Product).where(Product.id == item['product_id'])
-            result = await session.execute(query)
-            product = result.scalar_one_or_none()
-
+            product = await session.get(Product, item['product_id'])
             if product:
-                new_reserved = (product.відкладено or 0) + item['quantity']
-                update_query = (
-                    update(Product)
-                    .where(Product.id == item['product_id'])
-                    .values(відкладено=new_reserved)
-                )
-                await session.execute(update_query)
-        
+                product.відкладено = (product.відкладено or 0) + item['quantity']
         await session.commit()
 
 async def orm_clear_all_reservations():
-    """Обнуляє поле 'відкладено' для всіх товарів."""
     async with async_session() as session:
         await session.execute(update(Product).values(відкладено=0))
         await session.commit()
+
+# --- НОВІ ФУНКЦІЇ ДЛЯ АРХІВУ ---
+async def orm_add_saved_list(user_id: int, file_name: str, file_path: str, items: list):
+    """Зберігає інформацію про новий список та його вміст у базу даних."""
+    async with async_session() as session:
+        new_list = SavedList(user_id=user_id, file_name=file_name, file_path=file_path)
+        session.add(new_list)
+        await session.flush() # Отримуємо ID для нового списку
+        
+        for item in items:
+            list_item = SavedListItem(
+                list_id=new_list.id,
+                article_name=item['article_name'],
+                quantity=item['quantity']
+            )
+            session.add(list_item)
+        
+        await session.commit()
+
+async def orm_get_user_lists_archive(user_id: int):
+    """Повертає список збережених файлів для конкретного користувача."""
+    async with async_session() as session:
+        query = select(SavedList).where(SavedList.user_id == user_id).order_by(SavedList.created_at.desc())
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def orm_get_all_files_for_user(user_id: int):
+    """Повертає шляхи до всіх файлів користувача для ZIP-архівації."""
+    async with async_session() as session:
+        query = select(SavedList.file_path).where(SavedList.user_id == user_id)
+        result = await session.execute(query)
+        return result.scalars().all()

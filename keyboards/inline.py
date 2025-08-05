@@ -26,3 +26,11 @@ def get_add_to_list_kb(product_id: int):
             [InlineKeyboardButton(text="🛒 Додати до списку", callback_data=f"add_to_list:{product_id}")]
         ]
     )
+    
+def get_archive_kb():
+    """Повертає клавіатуру для меню архіву."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📦 Запакувати все в ZIP-архів", callback_data="download_all_zip")]
+        ]
+    )
