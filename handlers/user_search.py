@@ -61,16 +61,24 @@ async def show_product_from_button(callback: CallbackQuery):
 
 async def show_product_card(message: Message, product):
     """Формує та відправляє картку товару."""
-    # --- ВИКОРИСТОВУЄМО НОВУ ФУНКЦІЮ ФОРМАТУВАННЯ ---
-    display_quantity = format_quantity(product.кількість)
-    
+    try:
+        # --- НОВА ЛОГІКА: Обчислюємо доступний залишок ---
+        stock_quantity = float(product.кількість)
+        reserved_quantity = product.відкладено or 0
+        available_quantity = stock_quantity - reserved_quantity
+        
+        # Форматуємо для красивого виводу
+        display_available = format_quantity(str(available_quantity))
+    except (ValueError, TypeError):
+        display_available = product.кількість # Якщо не можемо порахувати, показуємо як є
+
     card_text = (
         f"✅ *Знайдено товар*\n\n"
         f"📝 *Назва:* {product.назва}\n"
         f"🏢 *Відділ:* {product.відділ}\n"
         f"📂 *Група:* {product.група}\n"
-        f"📦 *Кількість на складі:* {display_quantity}\n" # <-- Змінено тут
-        f"🛒 *Відкладено:* {product.відкладено}"
+        f"📦 *Доступно для збирання:* {display_available}\n" # <-- ЗМІНЕНО ТУТ
+        f"🛒 *Вже зібрано:* {product.відкладено}" # <-- ЗМІНЕНО ТУТ
     )
     await message.answer(
         card_text,
