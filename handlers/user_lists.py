@@ -4,18 +4,19 @@ from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
-
 from database.orm import (
     orm_get_product_by_id, orm_update_reserved_quantity, orm_add_saved_list,
     orm_clear_temp_list, orm_add_item_to_temp_list, orm_get_temp_list, orm_get_temp_list_department
 )
 from config import ARCHIVES_PATH
+from database.engine import async_session # Імпортуємо сесію для транзакції
 
 router = Router()
 
 class ListStates(StatesGroup):
     waiting_for_quantity = State()
 
+# --- Обробники кнопок головного меню ---
 @router.message(F.text == "Новий список")
 async def new_list_handler(message: Message):
     await orm_clear_temp_list(message.from_user.id)
@@ -39,6 +40,7 @@ async def my_list_handler(message: Message):
     save_button = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💾 Зберегти та відкласти", callback_data="save_list")]])
     await message.answer("\n".join(response_lines), reply_markup=save_button)
 
+# --- Логіка додавання до списку ---
 @router.callback_query(F.data.startswith("add_to_list:"))
 async def add_to_list_callback(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -53,9 +55,9 @@ async def add_to_list_callback(callback: CallbackQuery, state: FSMContext):
         await callback.answer(f"Заборонено! Усі товари повинні бути з відділу {allowed_department}.", show_alert=True)
         return
     
-    await state.update_data(product_id=product_id, product_name=product.назва, article=product.артикул)
-    await state.set_state(ListStates.waiting_for_quantity)
+    await state.update_data(product_id=product_id, article=product.артикул)
     await callback.message.answer(f"Введіть кількість для товару:\n`{product.назва}`")
+    await state.set_state(ListStates.waiting_for_quantity)
     await callback.answer()
 
 @router.message(ListStates.waiting_for_quantity, F.text.isdigit())
@@ -66,6 +68,7 @@ async def process_quantity(message: Message, state: FSMContext):
     await message.answer(f"Товар `{data.get('article')}` у кількості *{quantity}* додано до списку.")
     await state.clear()
 
+# --- ОНОВЛЕНА ЛОГІКА ЗБЕРЕЖЕННЯ ---
 @router.callback_query(F.data == "save_list")
 async def save_list_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -73,31 +76,81 @@ async def save_list_callback(callback: CallbackQuery):
     if not temp_list:
         await callback.answer("Список порожній.", show_alert=True)
         return
-
-    archive_dir = os.path.join(ARCHIVES_PATH, f"user_{user_id}")
-    os.makedirs(archive_dir, exist_ok=True)
     
-    first_article_name = temp_list[0].product.артикул
-    file_name = f"{first_article_name}.xlsx"
-    file_path = os.path.join(archive_dir, file_name)
-    
-    excel_data = [{'артикул': item.product.артикул, 'кількість': item.quantity} for item in temp_list]
-    df_list = pd.DataFrame(excel_data)
+    await callback.message.edit_text("Перевіряю залишки та формую списки...")
 
-    try:
-        df_list.to_excel(file_path, index=False, header=False)
-        items_for_db = [{'article_name': item.product.назва, 'quantity': item.quantity} for item in temp_list]
-        await orm_add_saved_list(user_id, file_name, file_path, items_for_db)
+    in_stock_list = []
+    surplus_list = [] # "лишки"
+
+    # Використовуємо одну сесію для всіх перевірок
+    async with async_session() as session:
+        for item in temp_list:
+            product = await session.get(Product, item.product_id)
+            if not product: continue
+            
+            try:
+                # Конвертуємо кількість на складі у число, обережно
+                stock_quantity = int(float(product.кількість))
+            except ValueError:
+                stock_quantity = 0 # Якщо кількість - не число, вважаємо, що його немає
+
+            available_stock = stock_quantity - (product.відкладено or 0)
+
+            if item.quantity <= available_stock:
+                in_stock_list.append(item)
+            else:
+                if available_stock > 0:
+                    in_stock_list.append(type('obj', (object,), {'product': item.product, 'quantity': available_stock})())
+                surplus_list.append(type('obj', (object,), {'product': item.product, 'quantity': item.quantity - available_stock})())
+
+    # --- Обробка основного списку (те, що є в наявності) ---
+    if in_stock_list:
+        first_article_name = in_stock_list[0].product.артикул
+        file_name = f"{first_article_name}.xlsx"
+        archive_dir = os.path.join(ARCHIVES_PATH, f"user_{user_id}")
+        os.makedirs(archive_dir, exist_ok=True)
+        file_path = os.path.join(archive_dir, file_name)
+
+        excel_data = [{'артикул': item.product.артикул, 'кількість': item.quantity} for item in in_stock_list]
+        df_list = pd.DataFrame(excel_data)
         
-        items_to_reserve = [{'product_id': item.product_id, 'quantity': item.quantity} for item in temp_list]
-        await orm_update_reserved_quantity(items_to_reserve)
+        try:
+            df_list.to_excel(file_path, index=False, header=False)
+            
+            async with async_session() as session:
+                items_for_db = [{'article_name': item.product.назва, 'quantity': item.quantity} for item in in_stock_list]
+                await orm_add_saved_list(user_id, file_name, file_path, items_for_db, session)
+                
+                items_to_reserve = [{'product_id': item.product.id, 'quantity': item.quantity} for item in in_stock_list]
+                await orm_update_reserved_quantity(items_to_reserve, session)
+                
+                await session.commit()
+            
+            document = FSInputFile(file_path)
+            await callback.message.answer_document(document, caption=f"✅ **Основний список** збережено.\nТовари відкладено, файл додано до архіву.")
         
-        await orm_clear_temp_list(user_id)
+        except Exception as e:
+            await callback.message.answer(f"Сталася помилка при збереженні основного списку: {e}")
+
+    # --- Обробка списку "лишків" ---
+    if surplus_list:
+        first_article_name = surplus_list[0].product.артикул
+        file_name = f"{first_article_name}-лишки.xlsx"
+        file_path = f"temp_{file_name}" # Зберігаємо тимчасово
+
+        excel_data = [{'артикул': item.product.артикул, 'кількість': item.quantity} for item in surplus_list]
+        df_list = pd.DataFrame(excel_data)
         
-        document = FSInputFile(file_path)
-        await callback.message.answer_document(document, caption="Ваш список збережено, товари відкладено, а файл додано до архіву.")
-        
-    except Exception as e:
-        await callback.message.answer(f"Сталася помилка: {e}")
-    finally:
-        await callback.answer("Список збережено!")
+        try:
+            df_list.to_excel(file_path, index=False, header=False)
+            document = FSInputFile(file_path)
+            await callback.message.answer_document(document, caption="⚠️ **УВАГА!**\nЦе список товарів, яких **не вистачило на складі** (лишки). Ці позиції **не відкладено** та **не додано до архіву**.")
+        except Exception as e:
+            await callback.message.answer(f"Сталася помилка при збереженні списку лишків: {e}")
+        finally:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+    # Очищуємо тимчасовий список користувача в будь-якому випадку
+    await orm_clear_temp_list(user_id)
+    await callback.answer("Обробку завершено!")
