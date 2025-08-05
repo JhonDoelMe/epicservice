@@ -1,9 +1,26 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
+
 from database.orm import orm_find_products, orm_get_product_by_id
 from keyboards.inline import get_search_results_kb, get_add_to_list_kb
 
 router = Router()
+
+def format_quantity(quantity_str: str):
+    """
+    Форматує кількість:
+    - Якщо число ціле (наприклад, "22.0" або "22"), повертає "22".
+    - Якщо число дробове (наприклад, "0.156"), повертає "0.156".
+    """
+    try:
+        quantity_float = float(quantity_str)
+        if quantity_float.is_integer():
+            return int(quantity_float)
+        else:
+            return quantity_float
+    except (ValueError, TypeError):
+        # Якщо це не число, повертаємо як є
+        return quantity_str
 
 @router.message(F.text.as_("text"))
 async def search_handler(message: Message, text: str):
@@ -12,11 +29,9 @@ async def search_handler(message: Message, text: str):
     if text.startswith('/') or text in known_commands:
         return
 
-    # --- НОВА ЛОГІКА: Перевірка довжини запиту ---
     if len(text) < 5:
         await message.answer("⚠️ Будь ласка, введіть для пошуку не менше 5 символів.")
         return
-    # ---------------------------------------------
 
     products = await orm_find_products(text)
     
@@ -39,7 +54,6 @@ async def show_product_from_button(callback: CallbackQuery):
     product = await orm_get_product_by_id(product_id)
     
     if product:
-        # Видаляємо стару клавіатуру, щоб уникнути безладу
         await callback.message.edit_reply_markup(reply_markup=None)
         await show_product_card(callback.message, product)
     
@@ -47,12 +61,15 @@ async def show_product_from_button(callback: CallbackQuery):
 
 async def show_product_card(message: Message, product):
     """Формує та відправляє картку товару."""
+    # --- ВИКОРИСТОВУЄМО НОВУ ФУНКЦІЮ ФОРМАТУВАННЯ ---
+    display_quantity = format_quantity(product.кількість)
+    
     card_text = (
         f"✅ *Знайдено товар*\n\n"
         f"📝 *Назва:* {product.назва}\n"
         f"🏢 *Відділ:* {product.відділ}\n"
         f"📂 *Група:* {product.група}\n"
-        f"📦 *Кількість на складі:* {product.кількість}\n"
+        f"📦 *Кількість на складі:* {display_quantity}\n" # <-- Змінено тут
         f"🛒 *Відкладено:* {product.відкладено}"
     )
     await message.answer(
