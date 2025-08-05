@@ -4,17 +4,21 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from config import BOT_TOKEN
 from database.orm import create_tables
-from handlers import common, admin_panel, user_search, user_lists, archive # <-- Додано archive
+from handlers import common, admin_panel, user_search, user_lists, archive, error_handler
 
 async def main():
     logging.basicConfig(level=logging.INFO)
     await create_tables()
+    
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
     dp = Dispatcher()
 
+    # Реєструємо обробник помилок на самому верхньому рівні
+    dp.include_router(error_handler.router)
+
     dp.include_router(admin_panel.router)
     dp.include_router(common.router)
-    dp.include_router(archive.router) # <-- Зареєстровано новий роутер
+    dp.include_router(archive.router)
     dp.include_router(user_lists.router)
     dp.include_router(user_search.router)
 
