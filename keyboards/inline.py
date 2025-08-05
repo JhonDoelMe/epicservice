@@ -5,7 +5,7 @@ def get_admin_panel_kb():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📥 Імпорт товарів з Excel", callback_data="admin:import_products")],
-            [InlineKeyboardButton(text="👥 архіви користувачів", callback_data="admin:user_archives")]
+            [InlineKeyboardButton(text="👥 Архіви користувачів", callback_data="admin:user_archives")]
         ]
     )
 
