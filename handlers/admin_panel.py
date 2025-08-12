@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from config import ADMIN_IDS, ARCHIVES_PATH
-from keyboards.inline import get_admin_panel_kb, get_users_with_archives_kb, get_archive_kb, get_confirmation_kb
+from keyboards.inline import get_admin_panel_kb, get_users_with_archives_kb, get_archive_kb
 from database.orm import (
     orm_smart_import, orm_clear_all_reservations, orm_get_users_with_archives,
     orm_get_user_lists_archive, orm_get_all_files_for_user,
@@ -23,7 +23,6 @@ router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 class AdminStates(StatesGroup):
     waiting_for_import_file = State()
-    confirm_clear_reservations = State() # Новий стан для підтвердження
 
 @router.message(F.text == "👑 Адмін-панель")
 async def admin_panel_handler(message: Message):
@@ -35,61 +34,65 @@ async def admin_panel_callback_handler(callback: CallbackQuery):
     await callback.answer()
 
 # --- Логіка імпорту ---
+# --- ВИПРАВЛЕНИЙ ХЕНДЛЕР ---
 @router.callback_query(F.data == "admin:import_products")
 async def start_import_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Будь ласка, надішліть мені файл Excel (`.xlsx`) з товарами. Або натисніть 'Скасувати'.", reply_markup=cancel_kb)
+    # Спочатку редагуємо поточне повідомлення, щоб прибрати кнопки
+    await callback.message.edit_reply_markup(reply_markup=None)
+    # Потім надсилаємо нове повідомлення з Reply-клавіатурою
+    await callback.message.answer(
+        "Будь ласка, надішліть мені файл Excel (`.xlsx`) з товарами.\n\n"
+        "Для скасування натисніть кнопку нижче.",
+        reply_markup=cancel_kb
+    )
     await state.set_state(AdminStates.waiting_for_import_file)
     await callback.answer()
 
-# --- ОНОВЛЕНИЙ БЛОК ІМПОРТУ З ВАЛІДАЦІЄЮ ---
 @router.message(AdminStates.waiting_for_import_file, F.document)
 async def process_import_file(message: Message, state: FSMContext, bot: Bot):
     if not message.document.file_name.endswith('.xlsx'):
-        await message.answer("Помилка. Будь ласка, надішліть файл у форматі `.xlsx`.", reply_markup=admin_main_kb)
-        await state.clear()
+        await message.answer("Помилка. Будь ласка, надішліть файл у форматі `.xlsx`.")
         return
 
-    await message.answer("Завантажую та перевіряю файл...")
+    await message.answer("Завантажую та перевіряю файл...", reply_markup=admin_main_kb) # Повертаємо головну клаву
     file_path = f"temp_{message.document.file_id}.xlsx"
     await bot.download(message.document, destination=file_path)
 
-    # --- Нова логіка валідації ---
     try:
         df = pd.read_excel(file_path)
         expected_columns = ['в', 'г', 'н', 'к']
         if list(df.columns) != expected_columns:
-            await message.answer(f"❌ Помилка: назви колонок неправильні. Очікується: `в, г, н, к`, а у файлі: `{', '.join(df.columns)}`", reply_markup=admin_main_kb)
+            await message.answer(f"❌ Помилка: назви колонок неправильні. Очікується: `в, г, н, к`, а у файлі: `{', '.join(df.columns)}`")
             os.remove(file_path)
             await state.clear()
             return
 
-        # Перевірка типів даних
         errors = []
         for index, row in df.iterrows():
             if not pd.isna(row['н']) and (not isinstance(row['в'], (int, float)) or pd.isna(row['в'])):
                 errors.append(f"Рядок {index + 2}: 'відділ' має бути числом.")
-            if len(errors) > 10: # Обмеження на кількість помилок
+            if len(errors) > 10:
                 errors.append("... та багато інших помилок.")
                 break
         
         if errors:
-            await message.answer("❌ **У файлі знайдені помилки:**\n\n" + "\n".join(errors), reply_markup=admin_main_kb)
+            await message.answer("❌ **У файлі знайдені помилки:**\n\n" + "\n".join(errors))
             os.remove(file_path)
             await state.clear()
             return
 
     except Exception as e:
-        await message.answer(f"❌ Критична помилка при читанні файлу: {e}", reply_markup=admin_main_kb)
+        await message.answer(f"❌ Критична помилка при читанні файлу: {e}")
         if os.path.exists(file_path):
             os.remove(file_path)
         await state.clear()
         return
-    # --- Кінець логіки валідації ---
 
-    await message.answer("Файл виглядає добре. Починаю імпорт та очищення старих резервів...", reply_markup=admin_main_kb)
-    await orm_clear_all_reservations() # Очищуємо резерви тільки ПІСЛЯ валідації
+    await message.answer("Файл виглядає добре. Починаю імпорт та очищення старих резервів...")
+    await orm_clear_all_reservations()
     
-    result_message = await orm_smart_import(file_path, df) # Передаємо вже завантажений DataFrame
+    # У orm_smart_import передаємо тепер сам DataFrame, а не шлях до файлу
+    result_message = await orm_smart_import(df)
     await message.answer(result_message)
     await state.clear()
     
@@ -211,6 +214,5 @@ async def export_stock_handler(callback: CallbackQuery):
     else:
         await callback.message.answer("❌ Не вдалося створити звіт.")
         
-    # Повертаємо початкове повідомлення адмін-панелі
-    await callback.message.edit_text("Ви в панелі адміністратора. Оберіть дію:", reply_markup=get_admin_panel_kb())
+    await callback.message.answer("Ви в панелі адміністратора. Оберіть дію:", reply_markup=get_admin_panel_kb())
     await callback.answer()

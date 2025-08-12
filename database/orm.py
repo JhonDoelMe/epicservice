@@ -18,10 +18,9 @@ def _extract_article(name_str: str):
     match = re.match(r'^(\d{8,})', name_str)
     return match.group(1) if match else None
 
-# --- ОНОВЛЕНА ФУНКЦІЯ ІМПОРТУ ---
 def _sync_smart_import(dataframe: pd.DataFrame):
     try:
-        df = dataframe # Тепер приймаємо DataFrame напряму
+        df = dataframe
         df.rename(columns={'в': 'відділ', 'г': 'група', 'н': 'назва', 'к': 'кількість'}, inplace=True)
         updated_count, added_count = 0, 0
 
@@ -52,16 +51,12 @@ def _sync_smart_import(dataframe: pd.DataFrame):
     except Exception as e:
         return f"❌ Сталася помилка під час запису в БД: {str(e)}"
 
-async def orm_smart_import(file_path: str, dataframe: pd.DataFrame):
+async def orm_smart_import(dataframe: pd.DataFrame): # Змінено тут
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_smart_import, dataframe)
 
 # --- Функції пошуку ---
 async def orm_find_products(search_query: str):
-    """
-    Виконує комбінований пошук: спочатку швидкий SQL LIKE,
-    потім сортування результатів за допомогою нечіткого порівняння.
-    """
     async with async_session() as session:
         like_query = f"%{search_query}%"
         stmt = select(Product).where(
@@ -78,18 +73,15 @@ async def orm_find_products(search_query: str):
             article_score = fuzz.ratio(search_query, product.артикул) * 1.2
             name_score = fuzz.token_set_ratio(search_query.lower(), product.назва.lower())
             final_score = max(article_score, name_score)
+
             if final_score > 55:
                 scored_products.append((product, final_score))
-        
+
         scored_products.sort(key=lambda x: x[1], reverse=True)
         return [product for product, score in scored_products[:15]]
 
 
 async def orm_get_product_by_id(session, product_id: int, for_update: bool = False):
-    """
-    Знаходить один товар за його ID.
-    Якщо for_update=True, блокує рядок для оновлення.
-    """
     query = select(Product).where(Product.id == product_id)
     if for_update:
         query = query.with_for_update()
@@ -98,7 +90,6 @@ async def orm_get_product_by_id(session, product_id: int, for_update: bool = Fal
 
 # --- Функції резервування ---
 async def orm_update_reserved_quantity(session, items: list):
-    """Оновлює поле 'відкладено', використовуючи існуючу сесію."""
     for item in items:
         product = await orm_get_product_by_id(session, item['product_id'], for_update=True)
         if product:
