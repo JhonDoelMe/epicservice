@@ -3,7 +3,8 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 # Клавіатура для звичайного користувача
 user_main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="Новий список"), KeyboardButton(text="Мій список")]
+        [KeyboardButton(text="Новий список"), KeyboardButton(text="Мій список")],
+        [KeyboardButton(text="🗂️ Архів списків")] # <-- ДОДАНО
     ],
     resize_keyboard=True,
     input_field_placeholder="Введіть артикул або назву товару..."
