@@ -40,10 +40,27 @@ def get_search_results_kb(products: list):
         ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-def get_add_to_list_kb(product_id: int):
-    """Створює кнопку 'Додати до списку', використовуючи ID товару."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🛒 Додати до списку", callback_data=f"add_to_list:{product_id}")]
-        ]
-    )
+# --- ОНОВЛЕНА ФУНКЦІЯ ДЛЯ КНОПОК ДІЙ ---
+def get_product_actions_kb(product_id: int, available_quantity: int):
+    """
+    Створює кнопки дій для картки товару:
+    - Додати всю доступну кількість.
+    - Ввести іншу кількість.
+    """
+    keyboard = []
+    
+    # Додаємо кнопку "Додати все", тільки якщо є що додавати
+    if available_quantity > 0:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"✅ Додати все ({available_quantity})", 
+                callback_data=f"add_all:{product_id}:{available_quantity}"
+            )
+        ])
+    
+    # Кнопка для введення своєї кількості
+    keyboard.append([
+        InlineKeyboardButton(text="📝 Ввести іншу кількість", callback_data=f"add_custom:{product_id}")
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)

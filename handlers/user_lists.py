@@ -10,7 +10,6 @@ from database.orm import (
 )
 from config import ARCHIVES_PATH
 from database.engine import async_session
-# --- ДОДАНО ІМПОРТ МОДЕЛІ ---
 from database.models import Product
 
 router = Router()
@@ -18,7 +17,62 @@ router = Router()
 class ListStates(StatesGroup):
     waiting_for_quantity = State()
 
-# ... (код new_list_handler, my_list_handler, add_to_list_callback, process_quantity залишається без змін) ...
+# --- Логіка додавання до списку ---
+
+# НОВИЙ обробник для кнопки "Додати все"
+@router.callback_query(F.data.startswith("add_all:"))
+async def add_all_callback(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    parts = callback.data.split(":")
+    product_id = int(parts[1])
+    quantity = int(parts[2])
+
+    product = await orm_get_product_by_id(product_id)
+    if not product:
+        await callback.answer("Помилка: товар не знайдено.", show_alert=True)
+        return
+
+    allowed_department = await orm_get_temp_list_department(user_id)
+    if allowed_department is not None and product.відділ != allowed_department:
+        await callback.answer(f"Заборонено! Усі товари повинні бути з відділу {allowed_department}.", show_alert=True)
+        return
+
+    await orm_add_item_to_temp_list(user_id=user_id, product_id=product_id, quantity=quantity)
+    
+    article_display = product.артикул
+    await callback.message.answer(f"Товар `{article_display}` у кількості *{quantity}* додано до списку.")
+    await callback.answer()
+
+# Старий обробник, тепер для кнопки "Ввести іншу кількість"
+@router.callback_query(F.data.startswith("add_custom:"))
+async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    product_id = int(callback.data.split(":", 1)[1])
+    product = await orm_get_product_by_id(product_id)
+    if not product:
+        await callback.answer("Помилка: товар не знайдено.", show_alert=True)
+        return
+    
+    allowed_department = await orm_get_temp_list_department(user_id)
+    if allowed_department is not None and product.відділ != allowed_department:
+        await callback.answer(f"Заборонено! Усі товари повинні бути з відділу {allowed_department}.", show_alert=True)
+        return
+    
+    await state.update_data(product_id=product_id, article=product.артикул)
+    await callback.message.answer(f"Введіть кількість для товару:\n`{product.назва}`")
+    await state.set_state(ListStates.waiting_for_quantity)
+    await callback.answer()
+
+# --- Решта файлу залишається без змін ---
+@router.message(ListStates.waiting_for_quantity, F.text.isdigit())
+async def process_quantity(message: Message, state: FSMContext):
+    quantity = int(message.text)
+    data = await state.get_data()
+    await orm_add_item_to_temp_list(user_id=message.from_user.id, product_id=data.get("product_id"), quantity=quantity)
+    await message.answer(f"Товар `{data.get('article')}` у кількості *{quantity}* додано до списку.")
+    await state.clear()
+    
+# ... (код для "Новий список", "Мій список" та save_list_callback залишається тут) ...
 @router.message(F.text == "Новий список")
 async def new_list_handler(message: Message):
     await orm_clear_temp_list(message.from_user.id)
@@ -39,33 +93,7 @@ async def my_list_handler(message: Message):
         response_lines.append(f"{i}. `{article}` ({full_name[len(article)+3:]})\n   Кількість: *{item.quantity}*")
     save_button = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💾 Зберегти та відкласти", callback_data="save_list")]])
     await message.answer("\n".join(response_lines), reply_markup=save_button)
-
-@router.callback_query(F.data.startswith("add_to_list:"))
-async def add_to_list_callback(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    product_id = int(callback.data.split(":", 1)[1])
-    product = await orm_get_product_by_id(product_id)
-    if not product:
-        await callback.answer("Помилка: товар не знайдено.", show_alert=True)
-        return
-    allowed_department = await orm_get_temp_list_department(user_id)
-    if allowed_department is not None and product.відділ != allowed_department:
-        await callback.answer(f"Заборонено! Усі товари повинні бути з відділу {allowed_department}.", show_alert=True)
-        return
-    await state.update_data(product_id=product_id, article=product.артикул)
-    await callback.message.answer(f"Введіть кількість для товару:\n`{product.назва}`")
-    await state.set_state(ListStates.waiting_for_quantity)
-    await callback.answer()
-
-@router.message(ListStates.waiting_for_quantity, F.text.isdigit())
-async def process_quantity(message: Message, state: FSMContext):
-    quantity = int(message.text)
-    data = await state.get_data()
-    await orm_add_item_to_temp_list(user_id=message.from_user.id, product_id=data.get("product_id"), quantity=quantity)
-    await message.answer(f"Товар `{data.get('article')}` у кількості *{quantity}* додано до списку.")
-    await state.clear()
-
-# --- ОНОВЛЕНА ЛОГІКА ЗБЕРЕЖЕННЯ ---
+    
 @router.callback_query(F.data == "save_list")
 async def save_list_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -75,23 +103,17 @@ async def save_list_callback(callback: CallbackQuery):
         return
     
     await callback.message.edit_text("Перевіряю залишки та формую списки...")
-
-    in_stock_list = []
-    surplus_list = []
+    in_stock_list, surplus_list = [], []
 
     async with async_session() as session:
         for item in temp_list:
-            # Тепер код знає, що таке Product
             product = await session.get(Product, item.product_id)
             if not product: continue
-            
             try:
                 stock_quantity = int(float(product.кількість))
             except (ValueError, TypeError):
                 stock_quantity = 0
-
             available_stock = stock_quantity - (product.відкладено or 0)
-
             if item.quantity <= available_stock:
                 in_stock_list.append(item)
             else:
@@ -105,25 +127,18 @@ async def save_list_callback(callback: CallbackQuery):
         archive_dir = os.path.join(ARCHIVES_PATH, f"user_{user_id}")
         os.makedirs(archive_dir, exist_ok=True)
         file_path = os.path.join(archive_dir, file_name)
-
         excel_data = [{'артикул': item.product.артикул, 'кількість': item.quantity} for item in in_stock_list]
         df_list = pd.DataFrame(excel_data)
-        
         try:
             df_list.to_excel(file_path, index=False, header=False)
-            
             async with async_session() as session:
                 items_for_db = [{'article_name': item.product.назва, 'quantity': item.quantity} for item in in_stock_list]
                 await orm_add_saved_list(user_id, file_name, file_path, items_for_db, session)
-                
                 items_to_reserve = [{'product_id': item.product.id, 'quantity': item.quantity} for item in in_stock_list]
                 await orm_update_reserved_quantity(items_to_reserve, session)
-                
                 await session.commit()
-            
             document = FSInputFile(file_path)
-            await callback.message.answer_document(document, caption=f"✅ **Основний список** збережено.\nТовари відкладено, файл додано до архіву.")
-        
+            await callback.message.answer_document(document, caption=f"✅ **Основний список** збережено.")
         except Exception as e:
             await callback.message.answer(f"Сталася помилка при збереженні основного списку: {e}")
 
@@ -131,10 +146,8 @@ async def save_list_callback(callback: CallbackQuery):
         first_article_name = surplus_list[0].product.артикул
         file_name = f"{first_article_name}-лишки.xlsx"
         file_path = f"temp_{file_name}"
-
         excel_data = [{'артикул': item.product.артикул, 'кількість': item.quantity} for item in surplus_list]
         df_list = pd.DataFrame(excel_data)
-        
         try:
             df_list.to_excel(file_path, index=False, header=False)
             document = FSInputFile(file_path)
