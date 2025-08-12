@@ -9,12 +9,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from config import ADMIN_IDS, ARCHIVES_PATH
-from keyboards.inline import get_admin_panel_kb, get_users_with_archives_kb, get_archive_kb
+from keyboards.inline import get_admin_panel_kb, get_users_with_archives_kb, get_archive_kb, get_confirmation_kb
 from database.orm import (
     orm_smart_import, orm_clear_all_reservations, orm_get_users_with_archives,
     orm_get_user_lists_archive, orm_get_all_files_for_user,
-    orm_get_all_products_sync, orm_get_all_temp_list_items_sync # <-- Імпортуємо синхронні функції
+    orm_get_all_products_sync, orm_get_all_temp_list_items_sync
 )
+from keyboards.reply import admin_main_kb, cancel_kb
 
 router = Router()
 router.message.filter(F.from_user.id.in_(ADMIN_IDS))
@@ -22,6 +23,7 @@ router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 class AdminStates(StatesGroup):
     waiting_for_import_file = State()
+    confirm_clear_reservations = State() # Новий стан для підтвердження
 
 @router.message(F.text == "👑 Адмін-панель")
 async def admin_panel_handler(message: Message):
@@ -35,28 +37,73 @@ async def admin_panel_callback_handler(callback: CallbackQuery):
 # --- Логіка імпорту ---
 @router.callback_query(F.data == "admin:import_products")
 async def start_import_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("Будь ласка, надішліть мені файл Excel (`.xlsx`) з товарами.")
+    await callback.message.edit_text("Будь ласка, надішліть мені файл Excel (`.xlsx`) з товарами. Або натисніть 'Скасувати'.", reply_markup=cancel_kb)
     await state.set_state(AdminStates.waiting_for_import_file)
     await callback.answer()
 
+# --- ОНОВЛЕНИЙ БЛОК ІМПОРТУ З ВАЛІДАЦІЄЮ ---
 @router.message(AdminStates.waiting_for_import_file, F.document)
 async def process_import_file(message: Message, state: FSMContext, bot: Bot):
     if not message.document.file_name.endswith('.xlsx'):
-        await message.answer("Помилка. Будь ласка, надішліть файл у форматі `.xlsx`.")
+        await message.answer("Помилка. Будь ласка, надішліть файл у форматі `.xlsx`.", reply_markup=admin_main_kb)
+        await state.clear()
         return
-    await message.answer("Обробляю файл...")
-    await orm_clear_all_reservations()
+
+    await message.answer("Завантажую та перевіряю файл...")
     file_path = f"temp_{message.document.file_id}.xlsx"
     await bot.download(message.document, destination=file_path)
-    result_message = await orm_smart_import(file_path)
+
+    # --- Нова логіка валідації ---
+    try:
+        df = pd.read_excel(file_path)
+        expected_columns = ['в', 'г', 'н', 'к']
+        if list(df.columns) != expected_columns:
+            await message.answer(f"❌ Помилка: назви колонок неправильні. Очікується: `в, г, н, к`, а у файлі: `{', '.join(df.columns)}`", reply_markup=admin_main_kb)
+            os.remove(file_path)
+            await state.clear()
+            return
+
+        # Перевірка типів даних
+        errors = []
+        for index, row in df.iterrows():
+            if not pd.isna(row['н']) and (not isinstance(row['в'], (int, float)) or pd.isna(row['в'])):
+                errors.append(f"Рядок {index + 2}: 'відділ' має бути числом.")
+            if len(errors) > 10: # Обмеження на кількість помилок
+                errors.append("... та багато інших помилок.")
+                break
+        
+        if errors:
+            await message.answer("❌ **У файлі знайдені помилки:**\n\n" + "\n".join(errors), reply_markup=admin_main_kb)
+            os.remove(file_path)
+            await state.clear()
+            return
+
+    except Exception as e:
+        await message.answer(f"❌ Критична помилка при читанні файлу: {e}", reply_markup=admin_main_kb)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        await state.clear()
+        return
+    # --- Кінець логіки валідації ---
+
+    await message.answer("Файл виглядає добре. Починаю імпорт та очищення старих резервів...", reply_markup=admin_main_kb)
+    await orm_clear_all_reservations() # Очищуємо резерви тільки ПІСЛЯ валідації
+    
+    result_message = await orm_smart_import(file_path, df) # Передаємо вже завантажений DataFrame
     await message.answer(result_message)
     await state.clear()
+    
     if os.path.exists(file_path):
         os.remove(file_path)
 
+@router.message(AdminStates.waiting_for_import_file, F.text == "❌ Скасувати")
+async def cancel_import(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Імпорт скасовано.", reply_markup=admin_main_kb)
+
 @router.message(AdminStates.waiting_for_import_file)
 async def incorrect_import_file(message: Message):
-    await message.answer("Будь ласка, надішліть документ (файл Excel).")
+    await message.answer("Будь ласка, надішліть документ (файл Excel) або натисніть 'Скасувати'.")
 
 # --- Логіка перегляду архівів ---
 @router.callback_query(F.data == "admin:user_archives")

@@ -18,13 +18,10 @@ def _extract_article(name_str: str):
     match = re.match(r'^(\d{8,})', name_str)
     return match.group(1) if match else None
 
-def _sync_smart_import(file_path: str):
+# --- ОНОВЛЕНА ФУНКЦІЯ ІМПОРТУ ---
+def _sync_smart_import(dataframe: pd.DataFrame):
     try:
-        df = pd.read_excel(file_path)
-        expected_columns = ['в', 'г', 'н', 'к']
-        if list(df.columns) != expected_columns:
-            return f"❌ Помилка: назви колонок неправильні. Очікується: `в, г, н, к`"
-
+        df = dataframe # Тепер приймаємо DataFrame напряму
         df.rename(columns={'в': 'відділ', 'г': 'група', 'н': 'назва', 'к': 'кількість'}, inplace=True)
         updated_count, added_count = 0, 0
 
@@ -53,21 +50,19 @@ def _sync_smart_import(file_path: str):
         
         return f"✅ Імпорт завершено!\n🔄 Оновлено товарів: {updated_count}\n➕ Додано нових: {added_count}"
     except Exception as e:
-        return f"❌ Сталася помилка: {str(e)}"
+        return f"❌ Сталася помилка під час запису в БД: {str(e)}"
 
-async def orm_smart_import(file_path: str):
+async def orm_smart_import(file_path: str, dataframe: pd.DataFrame):
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _sync_smart_import, file_path)
+    return await loop.run_in_executor(None, _sync_smart_import, dataframe)
 
-# --- ВИПРАВЛЕНА ФУНКЦІЯ ПОШУКУ ---
+# --- Функції пошуку ---
 async def orm_find_products(search_query: str):
     """
     Виконує комбінований пошук: спочатку швидкий SQL LIKE,
     потім сортування результатів за допомогою нечіткого порівняння.
     """
     async with async_session() as session:
-        # 1. Швидкий відбір кандидатів за допомогою ILIKE
-        # Шукаємо як по назві, так і по артикулу
         like_query = f"%{search_query}%"
         stmt = select(Product).where(
             (Product.назва.ilike(like_query)) | (Product.артикул.ilike(like_query))
@@ -78,24 +73,15 @@ async def orm_find_products(search_query: str):
         if not candidates:
             return []
 
-        # 2. Розрахунок релевантності та сортування
-        # fuzz.token_set_ratio добре працює з частковими збігами та різним порядком слів
         scored_products = []
         for product in candidates:
-            # Надаємо пріоритет збігам по артикулу
-            article_score = fuzz.ratio(search_query, product.артикул) * 1.2 # Множник для пріоритету
+            article_score = fuzz.ratio(search_query, product.артикул) * 1.2
             name_score = fuzz.token_set_ratio(search_query.lower(), product.назва.lower())
-            
-            # Використовуємо вищий з двох показників
             final_score = max(article_score, name_score)
-
-            if final_score > 55: # Поріг схожості
+            if final_score > 55:
                 scored_products.append((product, final_score))
-
-        # Сортуємо за спаданням релевантності
+        
         scored_products.sort(key=lambda x: x[1], reverse=True)
-
-        # Повертаємо топ-15 результатів
         return [product for product, score in scored_products[:15]]
 
 
@@ -114,7 +100,6 @@ async def orm_get_product_by_id(session, product_id: int, for_update: bool = Fal
 async def orm_update_reserved_quantity(session, items: list):
     """Оновлює поле 'відкладено', використовуючи існуючу сесію."""
     for item in items:
-        # Блокуємо рядок товару перед оновленням
         product = await orm_get_product_by_id(session, item['product_id'], for_update=True)
         if product:
             product.відкладено = (product.відкладено or 0) + item['quantity']
