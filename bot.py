@@ -1,34 +1,38 @@
 import asyncio
 import logging
 import sys
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from sqlalchemy import text  # <-- ДОБАВЛЕНО
+
 from config import BOT_TOKEN
-from database.orm import create_tables
-from handlers import common, admin_panel, user_search, user_lists, archive, error_handler
+from database.engine import async_session
+from handlers import (admin_panel, archive, common, error_handler, user_lists,
+                      user_search)
+
 
 async def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
     
-    # 1. Критична перевірка наявності токена
     if not BOT_TOKEN:
         logging.critical("Критична помилка: BOT_TOKEN не знайдено. Перевірте .env файл або змінні оточення.")
         sys.exit(1)
 
-    # 2. Перевірка підключення до бази даних
+    # Перевіряємо з'єднання з базою даних
     try:
-        await create_tables()
-        logging.info("Таблиці в базі даних успішно перевірені/створені.")
+        async with async_session() as session:
+            # --- ВИПРАВЛЕНО ТУТ ---
+            await session.execute(text('SELECT 1'))
+        logging.info("З'єднання з базою даних успішно встановлено.")
     except Exception as e:
-        logging.critical(f"Не вдалося підключитися до бази даних та створити таблиці: {e}")
+        logging.critical(f"Не вдалося підключитися до бази даних: {e}")
         sys.exit(1)
     
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="Markdown"))
     dp = Dispatcher()
 
-    # Реєструємо обробник помилок на самому верхньому рівні
     dp.include_router(error_handler.router)
-
     dp.include_router(admin_panel.router)
     dp.include_router(common.router)
     dp.include_router(archive.router)

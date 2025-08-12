@@ -1,17 +1,14 @@
 import asyncio
-import pandas as pd
 import re
-from sqlalchemy import delete, select, update, func, bindparam
+
+import pandas as pd
+from sqlalchemy import bindparam, delete, func, select, update
 from sqlalchemy.orm import selectinload
 from thefuzz import fuzz
 
-from database.engine import async_engine, sync_session, async_session
+from database.engine import async_engine, async_session, sync_session
 from database.models import Base, Product, SavedList, SavedListItem, TempList
 
-async def create_tables():
-    """Створює всі таблиці в базі даних."""
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
 # --- Функції імпорту ---
 def _extract_article(name_str: str):

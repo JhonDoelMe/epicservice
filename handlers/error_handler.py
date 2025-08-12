@@ -1,6 +1,7 @@
-import logging
 import json
-from aiogram import Router, Bot
+import logging
+
+from aiogram import Bot, Router
 from aiogram.types import ErrorEvent
 
 router = Router()

@@ -1,4 +1,4 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 # Клавіатура для звичайного користувача
 user_main_kb = ReplyKeyboardMarkup(

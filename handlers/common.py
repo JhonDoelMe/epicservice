@@ -1,9 +1,9 @@
-from aiogram import Router, F
+from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 from config import ADMIN_IDS
-from keyboards.reply import user_main_kb, admin_main_kb
+from keyboards.reply import admin_main_kb, user_main_kb
 
 router = Router()
 

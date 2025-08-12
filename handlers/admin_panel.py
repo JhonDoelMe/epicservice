@@ -1,21 +1,24 @@
-import os
-import zipfile
-import pandas as pd
 import asyncio
 import logging
+import os
+import zipfile
 from datetime import datetime
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, FSInputFile
+
+import pandas as pd
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from config import ADMIN_IDS, ARCHIVES_PATH
-from keyboards.inline import get_admin_panel_kb, get_users_with_archives_kb, get_archive_kb
-from database.orm import (
-    orm_smart_import, orm_clear_all_reservations, orm_get_users_with_archives,
-    orm_get_user_lists_archive, orm_get_all_files_for_user,
-    orm_get_all_products_sync, orm_get_all_temp_list_items_sync
-)
+from database.orm import (orm_clear_all_reservations,
+                          orm_get_all_files_for_user,
+                          orm_get_all_products_sync,
+                          orm_get_all_temp_list_items_sync,
+                          orm_get_user_lists_archive,
+                          orm_get_users_with_archives, orm_smart_import)
+from keyboards.inline import (get_admin_panel_kb, get_archive_kb,
+                              get_users_with_archives_kb)
 from keyboards.reply import admin_main_kb, cancel_kb
 
 router = Router()

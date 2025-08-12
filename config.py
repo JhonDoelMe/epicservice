@@ -1,6 +1,7 @@
-import os
-from dotenv import load_dotenv
 import logging
+import os
+
+from dotenv import load_dotenv
 
 load_dotenv()
 

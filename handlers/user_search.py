@@ -1,8 +1,9 @@
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from database.orm import orm_find_products, orm_get_product_by_id
-from keyboards.inline import get_search_results_kb, get_product_actions_kb
+from aiogram import F, Router
+from aiogram.types import CallbackQuery, Message
+
 from database.engine import async_session
+from database.orm import orm_find_products, orm_get_product_by_id
+from keyboards.inline import get_product_actions_kb, get_search_results_kb
 
 router = Router()
 

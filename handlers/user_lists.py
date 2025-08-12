@@ -1,19 +1,21 @@
-import os
 import logging
+import os
+
 import pandas as pd
-from aiogram import Router, F
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 
-from database.orm import (
-    orm_get_product_by_id, orm_update_reserved_quantity, orm_add_saved_list,
-    orm_clear_temp_list, orm_add_item_to_temp_list, orm_get_temp_list, orm_get_temp_list_department
-)
 from config import ARCHIVES_PATH
 from database.engine import async_session
-from keyboards.reply import user_main_kb, cancel_kb
+from database.orm import (orm_add_item_to_temp_list, orm_add_saved_list,
+                          orm_clear_temp_list, orm_get_product_by_id,
+                          orm_get_temp_list, orm_get_temp_list_department,
+                          orm_update_reserved_quantity)
 from keyboards.inline import get_confirmation_kb
+from keyboards.reply import cancel_kb, user_main_kb
 
 router = Router()
 

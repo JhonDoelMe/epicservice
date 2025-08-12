@@ -45,3 +45,6 @@ tzdata==2025.2
 urllib3==2.5.0
 yarl==1.20.1
 thefuzz==0.22.1
+alembic==1.13.2
+black==24.4.2
+isort==5.13.2

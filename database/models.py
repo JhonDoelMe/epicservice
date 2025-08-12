@@ -1,6 +1,8 @@
-from sqlalchemy import String, BigInteger, Integer, ForeignKey, DateTime, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from typing import List
+
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 
 class Base(DeclarativeBase):
     pass
