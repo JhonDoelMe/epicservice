@@ -1,12 +1,14 @@
 import logging
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Message
 
 from database.orm import orm_get_user_lists_archive
 from keyboards.inline import get_archive_kb
+from lexicon.lexicon import LEXICON
 
 router = Router()
+
 
 @router.message(F.text == "🗂️ Архів списків")
 async def show_archive_handler(message: Message):
@@ -16,12 +18,14 @@ async def show_archive_handler(message: Message):
     archived_lists = await orm_get_user_lists_archive(user_id)
 
     if not archived_lists:
-        await message.answer("У вас ще немає збережених списків.")
+        await message.answer(LEXICON.NO_ARCHIVED_LISTS)
         return
 
-    response_text = "🗂️ *Ваш архів списків:*\n\n"
+    response_text = LEXICON.ARCHIVE_TITLE
     for i, lst in enumerate(archived_lists, 1):
         created_date = lst.created_at.strftime("%d.%m.%Y о %H:%M")
-        response_text += f"{i}. `{lst.file_name}` (від {created_date})\n"
+        response_text += LEXICON.ARCHIVE_ITEM.format(
+            i=i, file_name=lst.file_name, created_date=created_date
+        )
 
     await message.answer(response_text, reply_markup=get_archive_kb(user_id))
