@@ -13,7 +13,7 @@ from keyboards.inline import get_admin_panel_kb, get_users_with_archives_kb, get
 from database.orm import (
     orm_smart_import, orm_clear_all_reservations, orm_get_users_with_archives,
     orm_get_user_lists_archive, orm_get_all_files_for_user,
-    orm_get_all_products, orm_get_all_temp_list_items
+    orm_get_all_products_sync, orm_get_all_temp_list_items_sync # <-- Імпортуємо синхронні функції
 )
 
 router = Router()
@@ -109,11 +109,11 @@ async def admin_download_zip_handler(callback: CallbackQuery):
             os.remove(zip_path)
     await callback.answer()
 
-# --- НОВИЙ ОБРОБНИК ДЛЯ ЕКСПОРТУ ЗАЛИШКІВ ---
+# --- ОБРОБНИК ДЛЯ ЕКСПОРТУ ЗАЛИШКІВ ---
 def _sync_export_stock():
-    """Синхронна функція для створення звіту, щоб не блокувати бота."""
-    products = asyncio.run(orm_get_all_products())
-    temp_list_items = asyncio.run(orm_get_all_temp_list_items())
+    """Повністю синхронна функція для створення звіту."""
+    products = orm_get_all_products_sync()
+    temp_list_items = orm_get_all_temp_list_items_sync()
 
     temp_reservations = {}
     for item in temp_list_items:
@@ -164,4 +164,6 @@ async def export_stock_handler(callback: CallbackQuery):
     else:
         await callback.message.answer("❌ Не вдалося створити звіт.")
         
+    # Повертаємо початкове повідомлення адмін-панелі
+    await callback.message.edit_text("Ви в панелі адміністратора. Оберіть дію:", reply_markup=get_admin_panel_kb())
     await callback.answer()

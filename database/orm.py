@@ -51,7 +51,6 @@ def _sync_smart_import(file_path: str):
             session.commit()
         
         return f"✅ Імпорт завершено!\n🔄 Оновлено товарів: {updated_count}\n➕ Додано нових: {added_count}"
-
     except Exception as e:
         return f"❌ Сталася помилка: {str(e)}"
 
@@ -136,17 +135,17 @@ async def orm_get_temp_list_department(user_id: int):
         first_item = result.scalar_one_or_none()
         return first_item.product.відділ if first_item and first_item.product else None
 
-# --- НОВІ ФУНКЦІЇ ДЛЯ ЕКСПОРТУ ---
-async def orm_get_all_products():
-    """Повертає абсолютно всі товари з бази даних."""
-    async with async_session() as session:
+# --- СИНХРОННІ ФУНКЦІЇ ДЛЯ ЕКСПОРТУ ---
+def orm_get_all_products_sync():
+    """Синхронно повертає абсолютно всі товари з бази даних."""
+    with sync_session() as session:
         query = select(Product).order_by(Product.відділ, Product.назва)
-        result = await session.execute(query)
+        result = session.execute(query)
         return result.scalars().all()
 
-async def orm_get_all_temp_list_items():
-    """Повертає всі позиції з усіх тимчасових кошиків."""
-    async with async_session() as session:
+def orm_get_all_temp_list_items_sync():
+    """Синхронно повертає всі позиції з усіх тимчасових кошиків."""
+    with sync_session() as session:
         query = select(TempList)
-        result = await session.execute(query)
+        result = session.execute(query)
         return result.scalars().all()
