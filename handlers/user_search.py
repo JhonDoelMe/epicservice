@@ -1,8 +1,8 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from database.orm import orm_find_products, orm_get_product_by_id
-# --- Змінюємо імпорт ---
 from keyboards.inline import get_search_results_kb, get_product_actions_kb
+from database.engine import async_session # <-- Додаємо імпорт сесії
 
 router = Router()
 
@@ -16,7 +16,6 @@ def format_quantity(quantity_str: str):
 
 @router.message(F.text.as_("text"))
 async def search_handler(message: Message, text: str):
-    """Обробляє текстові повідомлення як пошукові запити."""
     known_commands = ["Новий список", "Мій список", "🗂️ Архів списків", "👑 Адмін-панель"]
     if text.startswith('/') or text in known_commands:
         return
@@ -42,10 +41,15 @@ async def search_handler(message: Message, text: str):
 @router.callback_query(F.data.startswith("product:"))
 async def show_product_from_button(callback: CallbackQuery):
     product_id = int(callback.data.split(":", 1)[1])
-    product = await orm_get_product_by_id(product_id)
-    if product:
-        await callback.message.edit_reply_markup(reply_markup=None)
-        await show_product_card(callback.message, product)
+    
+    # --- ВИПРАВЛЕННЯ ТУТ ---
+    async with async_session() as session:
+        product = await orm_get_product_by_id(session, product_id)
+        if product:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await show_product_card(callback.message, product)
+    # -----------------------
+    
     await callback.answer()
 
 async def show_product_card(message: Message, product):
@@ -68,7 +72,6 @@ async def show_product_card(message: Message, product):
         f"📦 *Доступно для збирання:* {display_available}\n"
         f"🛒 *Вже зібрано:* {product.відкладено}"
     )
-    # --- ВИКОРИСТОВУЄМО НОВУ КЛАВІАТУРУ ---
     await message.answer(
         card_text,
         reply_markup=get_product_actions_kb(product.id, int_available)

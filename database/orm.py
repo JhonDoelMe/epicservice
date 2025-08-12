@@ -66,14 +66,23 @@ async def orm_find_products(search_query: str):
         result = await session.execute(stmt, {"search_term": like_query})
         return result.scalars().all()
 
-async def orm_get_product_by_id(product_id: int):
-    async with async_session() as session:
-        return await session.get(Product, product_id)
+async def orm_get_product_by_id(session, product_id: int, for_update: bool = False):
+    """
+    Знаходить один товар за його ID.
+    Якщо for_update=True, блокує рядок для оновлення.
+    """
+    query = select(Product).where(Product.id == product_id)
+    if for_update:
+        query = query.with_for_update()
+    result = await session.execute(query)
+    return result.scalar_one_or_none()
 
 # --- Функції резервування ---
-async def orm_update_reserved_quantity(items: list, session):
+async def orm_update_reserved_quantity(session, items: list):
+    """Оновлює поле 'відкладено', використовуючи існуючу сесію."""
     for item in items:
-        product = await session.get(Product, item['product_id'])
+        # Блокуємо рядок товару перед оновленням
+        product = await orm_get_product_by_id(session, item['product_id'], for_update=True)
         if product:
             product.відкладено = (product.відкладено or 0) + item['quantity']
 
@@ -135,16 +144,14 @@ async def orm_get_temp_list_department(user_id: int):
         first_item = result.scalar_one_or_none()
         return first_item.product.відділ if first_item and first_item.product else None
 
-# --- СИНХРОННІ ФУНКЦІЇ ДЛЯ ЕКСПОРТУ ---
+# --- Синхронні функції для експорту ---
 def orm_get_all_products_sync():
-    """Синхронно повертає абсолютно всі товари з бази даних."""
     with sync_session() as session:
         query = select(Product).order_by(Product.відділ, Product.назва)
         result = session.execute(query)
         return result.scalars().all()
 
 def orm_get_all_temp_list_items_sync():
-    """Синхронно повертає всі позиції з усіх тимчасових кошиків."""
     with sync_session() as session:
         query = select(TempList)
         result = session.execute(query)
