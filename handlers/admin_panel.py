@@ -101,10 +101,9 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
     
     result_message = await orm_smart_import(df)
     
-    # --- ВИПРАВЛЕНО ТУТ ---
+    # ИСПРАВЛЕНИЕ ЗДЕСЬ
     log_message = result_message.replace('\n', ' ')
     logging.info(f"Admin {admin_id}: Import finished. Result: {log_message}")
-    # --------------------
     
     await message.answer(result_message)
     await state.clear()
