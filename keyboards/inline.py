@@ -64,3 +64,19 @@ def get_product_actions_kb(product_id: int, available_quantity: int):
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+# --- НОВА УНІВЕРСАЛЬНА ФУНКЦІЯ ---
+def get_confirmation_kb(confirm_callback: str, cancel_callback: str):
+    """
+    Створює клавіатуру підтвердження (Так/Ні).
+    :param confirm_callback: callback_data для кнопки "Так"
+    :param cancel_callback: callback_data для кнопки "Ні"
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Так", callback_data=confirm_callback),
+                InlineKeyboardButton(text="❌ Ні", callback_data=cancel_callback)
+            ]
+        ]
+    )

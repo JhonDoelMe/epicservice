@@ -3,6 +3,7 @@ import pandas as pd
 import re
 from sqlalchemy import delete, select, update, func, bindparam
 from sqlalchemy.orm import selectinload
+from thefuzz import fuzz
 
 from database.engine import async_engine, sync_session, async_session
 from database.models import Base, Product, SavedList, SavedListItem, TempList
@@ -60,11 +61,38 @@ async def orm_smart_import(file_path: str):
 
 # --- Функції пошуку ---
 async def orm_find_products(search_query: str):
+    """
+    Виконує нечіткий пошук товарів.
+    Спочатку шукає точне входження артикула, потім застосовує fuzz.ratio для назв.
+    """
     async with async_session() as session:
-        like_query = f"%{search_query}%"
-        stmt = select(Product).where((Product.назва.ilike(bindparam("search_term"))) | (Product.артикул.ilike(bindparam("search_term")))).limit(15)
-        result = await session.execute(stmt, {"search_term": like_query})
-        return result.scalars().all()
+        # 1. Спроба знайти за точним збігом артикула (якщо запит - число)
+        if search_query.isdigit():
+            stmt = select(Product).where(Product.артикул.ilike(f"%{search_query}%"))
+            result = await session.execute(stmt)
+            products = result.scalars().all()
+            if products:
+                return products
+
+        # 2. Якщо точного збігу немає, виконуємо нечіткий пошук по всім товарам
+        all_products_stmt = select(Product)
+        all_products_result = await session.execute(all_products_stmt)
+        all_products = all_products_result.scalars().all()
+
+        # Розраховуємо схожість для кожного товару
+        # fuzz.ratio - добре підходить для коротких рядків (назв)
+        scored_products = []
+        for product in all_products:
+            score = fuzz.ratio(search_query.lower(), product.назва.lower())
+            if score > 65: # Поріг схожості, можна регулювати
+                scored_products.append((product, score))
+
+        # Сортуємо за спаданням релевантності
+        scored_products.sort(key=lambda x: x[1], reverse=True)
+
+        # Повертаємо топ-15 результатів
+        return [product for product, score in scored_products[:15]]
+
 
 async def orm_get_product_by_id(session, product_id: int, for_update: bool = False):
     """

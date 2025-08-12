@@ -12,18 +12,41 @@ from database.orm import (
 )
 from config import ARCHIVES_PATH
 from database.engine import async_session
-from database.models import Product
+from keyboards.reply import user_main_kb, cancel_kb # Імпортуємо клавіатури
+from keyboards.inline import get_confirmation_kb # Імпортуємо інлайн-клавіатуру
 
 router = Router()
 
 class ListStates(StatesGroup):
     waiting_for_quantity = State()
+    confirm_new_list = State() # Новий стан для підтвердження
 
-# --- ПОВЕРНЕНИЙ БЛОК ---
+# --- ОНОВЛЕНИЙ БЛОК СТВОРЕННЯ НОВОГО СПИСКУ ---
 @router.message(F.text == "Новий список")
-async def new_list_handler(message: Message):
-    await orm_clear_temp_list(message.from_user.id)
-    await message.answer("Створено новий порожній список. Тепер шукайте товари та додавайте їх.")
+async def new_list_handler(message: Message, state: FSMContext):
+    """Запитує підтвердження на створення нового списку."""
+    await message.answer(
+        "⚠️ Ви впевнені, що хочете створити новий список?\n"
+        "**Весь поточний незбережений список буде видалено!**",
+        reply_markup=get_confirmation_kb("confirm_new_list", "cancel_new_list")
+    )
+    await state.set_state(ListStates.confirm_new_list)
+
+@router.callback_query(ListStates.confirm_new_list, F.data == "confirm_new_list")
+async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
+    """Обробляє підтвердження та створює новий список."""
+    await orm_clear_temp_list(callback.from_user.id)
+    await callback.message.edit_text("✅ Створено новий порожній список. Тепер шукайте товари та додавайте їх.")
+    await state.clear()
+    await callback.answer()
+
+@router.callback_query(ListStates.confirm_new_list, F.data == "cancel_new_list")
+async def new_list_canceled(callback: CallbackQuery, state: FSMContext):
+    """Обробляє скасування створення нового списку."""
+    await callback.message.edit_text("Дію скасовано. Ваш поточний список залишається без змін.")
+    await state.clear()
+    await callback.answer()
+
 
 @router.message(F.text == "Мій список")
 async def my_list_handler(message: Message):
@@ -45,7 +68,6 @@ async def my_list_handler(message: Message):
         inline_keyboard=[[InlineKeyboardButton(text="💾 Зберегти та відкласти", callback_data="save_list")]]
     )
     await message.answer("\n".join(response_lines), reply_markup=save_button)
-# --- КІНЕЦЬ ПОВЕРНЕНОГО БЛОКУ ---
 
 @router.callback_query(F.data.startswith("add_all:"))
 async def add_all_callback(callback: CallbackQuery):
@@ -88,16 +110,25 @@ async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
             return
         
         await state.update_data(product_id=product_id, article=product.артикул)
-        await callback.message.answer(f"Введіть кількість для товару:\n`{product.назва}`")
+        # Надсилаємо повідомлення з клавіатурою скасування
+        await callback.message.answer(f"Введіть кількість для товару:\n`{product.назва}`", reply_markup=cancel_kb)
         await state.set_state(ListStates.waiting_for_quantity)
     await callback.answer()
+
+# Новий обробник для кнопки "Скасувати"
+@router.message(ListStates.waiting_for_quantity, F.text == "❌ Скасувати")
+async def cancel_quantity_input(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Дію скасовано.", reply_markup=user_main_kb)
+
 
 @router.message(ListStates.waiting_for_quantity, F.text.isdigit())
 async def process_quantity(message: Message, state: FSMContext):
     quantity = int(message.text)
     data = await state.get_data()
     await orm_add_item_to_temp_list(user_id=message.from_user.id, product_id=data.get("product_id"), quantity=quantity)
-    await message.answer(f"Товар `{data.get('article')}` у кількості *{quantity}* додано до списку.")
+    # Повертаємо основну клавіатуру після успішного вводу
+    await message.answer(f"Товар `{data.get('article')}` у кількості *{quantity}* додано до списку.", reply_markup=user_main_kb)
     await state.clear()
 
 @router.callback_query(F.data == "save_list")

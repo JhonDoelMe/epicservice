@@ -18,3 +18,11 @@ admin_main_kb = ReplyKeyboardMarkup(
     resize_keyboard=True,
     input_field_placeholder="Введіть артикул, назву або команду..."
 )
+
+# Клавіатура для скасування дії (для FSM станів)
+cancel_kb = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❌ Скасувати")]
+    ],
+    resize_keyboard=True
+)

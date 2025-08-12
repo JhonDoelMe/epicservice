@@ -1,11 +1,21 @@
 import os
 from dotenv import load_dotenv
+import logging
 
 load_dotenv()
 
 # --- BOT ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [int(admin_id) for admin_id in os.getenv("ADMIN_IDS").split(',')]
+
+# Безпечний парсинг ADMIN_IDS
+try:
+    # Фільтруємо порожні строки, які можуть з'явитися, якщо в кінці коми
+    admin_ids_str = os.getenv("ADMIN_IDS", "")
+    ADMIN_IDS = [int(admin_id) for admin_id in admin_ids_str.split(',') if admin_id]
+except (ValueError, TypeError):
+    logging.warning("ADMIN_IDS не вдалося завантажити. Перевірте формат у .env файлі. Очікується 'ID1,ID2,ID3'")
+    ADMIN_IDS = []
+
 
 # --- DATABASE ---
 DB_USER = os.getenv("DB_USER")
