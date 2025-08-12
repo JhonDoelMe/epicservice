@@ -1,7 +1,7 @@
 import asyncio
 import pandas as pd
 import re
-from sqlalchemy import delete, select, update, func
+from sqlalchemy import delete, select, update, func, bindparam
 from sqlalchemy.orm import selectinload
 
 from database.engine import async_engine, sync_session, async_session
@@ -12,6 +12,7 @@ async def create_tables():
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+# --- Функції імпорту ---
 def _extract_article(name_str: str):
     match = re.match(r'^(\d{8,})', name_str)
     return match.group(1) if match else None
@@ -58,18 +59,20 @@ async def orm_smart_import(file_path: str):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_smart_import, file_path)
 
+# --- Функції пошуку ---
 async def orm_find_products(search_query: str):
     async with async_session() as session:
-        query = select(Product).where((Product.назва.ilike(f'%{search_query}%')) | (Product.артикул.ilike(f'%{search_query}%'))).limit(15)
-        result = await session.execute(query)
+        like_query = f"%{search_query}%"
+        stmt = select(Product).where((Product.назва.ilike(bindparam("search_term"))) | (Product.артикул.ilike(bindparam("search_term")))).limit(15)
+        result = await session.execute(stmt, {"search_term": like_query})
         return result.scalars().all()
 
 async def orm_get_product_by_id(product_id: int):
     async with async_session() as session:
         return await session.get(Product, product_id)
 
+# --- Функції резервування ---
 async def orm_update_reserved_quantity(items: list, session):
-    """Оновлює поле 'відкладено', використовуючи існуючу сесію."""
     for item in items:
         product = await session.get(Product, item['product_id'])
         if product:
@@ -80,8 +83,8 @@ async def orm_clear_all_reservations():
         await session.execute(update(Product).values(відкладено=0))
         await session.commit()
 
+# --- Функції архіву ---
 async def orm_add_saved_list(user_id: int, file_name: str, file_path: str, items: list, session):
-    """Зберігає інформацію про новий список, використовуючи існуючу сесію."""
     new_list = SavedList(user_id=user_id, file_name=file_name, file_path=file_path)
     session.add(new_list)
     await session.flush()
@@ -107,6 +110,7 @@ async def orm_get_users_with_archives():
         result = await session.execute(query)
         return result.all()
 
+# --- Функції тимчасових списків ("кошиків") ---
 async def orm_clear_temp_list(user_id: int):
     async with async_session() as session:
         query = delete(TempList).where(TempList.user_id == user_id)
@@ -131,3 +135,18 @@ async def orm_get_temp_list_department(user_id: int):
         result = await session.execute(query)
         first_item = result.scalar_one_or_none()
         return first_item.product.відділ if first_item and first_item.product else None
+
+# --- НОВІ ФУНКЦІЇ ДЛЯ ЕКСПОРТУ ---
+async def orm_get_all_products():
+    """Повертає абсолютно всі товари з бази даних."""
+    async with async_session() as session:
+        query = select(Product).order_by(Product.відділ, Product.назва)
+        result = await session.execute(query)
+        return result.scalars().all()
+
+async def orm_get_all_temp_list_items():
+    """Повертає всі позиції з усіх тимчасових кошиків."""
+    async with async_session() as session:
+        query = select(TempList)
+        result = await session.execute(query)
+        return result.scalars().all()
