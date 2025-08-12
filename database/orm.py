@@ -59,33 +59,38 @@ async def orm_smart_import(file_path: str):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_smart_import, file_path)
 
-# --- Функції пошуку ---
+# --- ВИПРАВЛЕНА ФУНКЦІЯ ПОШУКУ ---
 async def orm_find_products(search_query: str):
     """
-    Виконує нечіткий пошук товарів.
-    Спочатку шукає точне входження артикула, потім застосовує fuzz.ratio для назв.
+    Виконує комбінований пошук: спочатку швидкий SQL LIKE,
+    потім сортування результатів за допомогою нечіткого порівняння.
     """
     async with async_session() as session:
-        # 1. Спроба знайти за точним збігом артикула (якщо запит - число)
-        if search_query.isdigit():
-            stmt = select(Product).where(Product.артикул.ilike(f"%{search_query}%"))
-            result = await session.execute(stmt)
-            products = result.scalars().all()
-            if products:
-                return products
+        # 1. Швидкий відбір кандидатів за допомогою ILIKE
+        # Шукаємо як по назві, так і по артикулу
+        like_query = f"%{search_query}%"
+        stmt = select(Product).where(
+            (Product.назва.ilike(like_query)) | (Product.артикул.ilike(like_query))
+        )
+        result = await session.execute(stmt)
+        candidates = result.scalars().all()
 
-        # 2. Якщо точного збігу немає, виконуємо нечіткий пошук по всім товарам
-        all_products_stmt = select(Product)
-        all_products_result = await session.execute(all_products_stmt)
-        all_products = all_products_result.scalars().all()
+        if not candidates:
+            return []
 
-        # Розраховуємо схожість для кожного товару
-        # fuzz.ratio - добре підходить для коротких рядків (назв)
+        # 2. Розрахунок релевантності та сортування
+        # fuzz.token_set_ratio добре працює з частковими збігами та різним порядком слів
         scored_products = []
-        for product in all_products:
-            score = fuzz.ratio(search_query.lower(), product.назва.lower())
-            if score > 65: # Поріг схожості, можна регулювати
-                scored_products.append((product, score))
+        for product in candidates:
+            # Надаємо пріоритет збігам по артикулу
+            article_score = fuzz.ratio(search_query, product.артикул) * 1.2 # Множник для пріоритету
+            name_score = fuzz.token_set_ratio(search_query.lower(), product.назва.lower())
+            
+            # Використовуємо вищий з двох показників
+            final_score = max(article_score, name_score)
+
+            if final_score > 55: # Поріг схожості
+                scored_products.append((product, final_score))
 
         # Сортуємо за спаданням релевантності
         scored_products.sort(key=lambda x: x[1], reverse=True)
