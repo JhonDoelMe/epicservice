@@ -12,19 +12,17 @@ from database.orm import (
 )
 from config import ARCHIVES_PATH
 from database.engine import async_session
-from keyboards.reply import user_main_kb, cancel_kb # Імпортуємо клавіатури
-from keyboards.inline import get_confirmation_kb # Імпортуємо інлайн-клавіатуру
+from keyboards.reply import user_main_kb, cancel_kb
+from keyboards.inline import get_confirmation_kb
 
 router = Router()
 
 class ListStates(StatesGroup):
     waiting_for_quantity = State()
-    confirm_new_list = State() # Новий стан для підтвердження
+    confirm_new_list = State()
 
-# --- ОНОВЛЕНИЙ БЛОК СТВОРЕННЯ НОВОГО СПИСКУ ---
 @router.message(F.text == "Новий список")
 async def new_list_handler(message: Message, state: FSMContext):
-    """Запитує підтвердження на створення нового списку."""
     await message.answer(
         "⚠️ Ви впевнені, що хочете створити новий список?\n"
         "**Весь поточний незбережений список буде видалено!**",
@@ -34,19 +32,18 @@ async def new_list_handler(message: Message, state: FSMContext):
 
 @router.callback_query(ListStates.confirm_new_list, F.data == "confirm_new_list")
 async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
-    """Обробляє підтвердження та створює новий список."""
-    await orm_clear_temp_list(callback.from_user.id)
+    user_id = callback.from_user.id
+    await orm_clear_temp_list(user_id)
+    logging.info(f"User {user_id} created a new list (cleared temp list).")
     await callback.message.edit_text("✅ Створено новий порожній список. Тепер шукайте товари та додавайте їх.")
     await state.clear()
     await callback.answer()
 
 @router.callback_query(ListStates.confirm_new_list, F.data == "cancel_new_list")
 async def new_list_canceled(callback: CallbackQuery, state: FSMContext):
-    """Обробляє скасування створення нового списку."""
     await callback.message.edit_text("Дію скасовано. Ваш поточний список залишається без змін.")
     await state.clear()
     await callback.answer()
-
 
 @router.message(F.text == "Мій список")
 async def my_list_handler(message: Message):
@@ -88,6 +85,7 @@ async def add_all_callback(callback: CallbackQuery):
             return
 
         await orm_add_item_to_temp_list(user_id=user_id, product_id=product_id, quantity=quantity)
+        logging.info(f"User {user_id} added product ID {product_id} (quantity: {quantity}) to temp list.")
     
         article_display = product.артикул
         await callback.message.answer(f"Товар `{article_display}` у кількості *{quantity}* додано до списку.")
@@ -110,30 +108,30 @@ async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
             return
         
         await state.update_data(product_id=product_id, article=product.артикул)
-        # Надсилаємо повідомлення з клавіатурою скасування
         await callback.message.answer(f"Введіть кількість для товару:\n`{product.назва}`", reply_markup=cancel_kb)
         await state.set_state(ListStates.waiting_for_quantity)
     await callback.answer()
 
-# Новий обробник для кнопки "Скасувати"
 @router.message(ListStates.waiting_for_quantity, F.text == "❌ Скасувати")
 async def cancel_quantity_input(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("Дію скасовано.", reply_markup=user_main_kb)
 
-
 @router.message(ListStates.waiting_for_quantity, F.text.isdigit())
 async def process_quantity(message: Message, state: FSMContext):
     quantity = int(message.text)
+    user_id = message.from_user.id
     data = await state.get_data()
-    await orm_add_item_to_temp_list(user_id=message.from_user.id, product_id=data.get("product_id"), quantity=quantity)
-    # Повертаємо основну клавіатуру після успішного вводу
+    product_id = data.get("product_id")
+    await orm_add_item_to_temp_list(user_id=user_id, product_id=product_id, quantity=quantity)
+    logging.info(f"User {user_id} added product ID {product_id} (quantity: {quantity}) via custom input.")
     await message.answer(f"Товар `{data.get('article')}` у кількості *{quantity}* додано до списку.", reply_markup=user_main_kb)
     await state.clear()
 
 @router.callback_query(F.data == "save_list")
 async def save_list_callback(callback: CallbackQuery):
     user_id = callback.from_user.id
+    logging.info(f"User {user_id} initiated list saving.")
     temp_list = await orm_get_temp_list(user_id)
     if not temp_list:
         await callback.answer("Список порожній.", show_alert=True)
@@ -164,7 +162,7 @@ async def save_list_callback(callback: CallbackQuery):
                 if items_to_reserve:
                     await orm_update_reserved_quantity(session, items_to_reserve)
     except Exception as e:
-        logging.error(f"Помилка під час транзакції: {e}")
+        logging.error(f"Transaction error for user {user_id} during list saving: {e}")
         await callback.message.answer(f"Сталася критична помилка під час перевірки залишків. Спробуйте знову.")
         return
     
@@ -184,8 +182,9 @@ async def save_list_callback(callback: CallbackQuery):
                 await session.commit()
             document = FSInputFile(file_path)
             await callback.message.answer_document(document, caption=f"✅ **Основний список** збережено.")
+            logging.info(f"User {user_id} successfully saved main list to {file_path}.")
         except Exception as e:
-            logging.error(f"Помилка при збереженні основного списку: {e}")
+            logging.error(f"Error saving main list for user {user_id}: {e}")
             await callback.message.answer(f"Сталася помилка при збереженні основного списку: {e}")
 
     if surplus_list:
@@ -198,8 +197,9 @@ async def save_list_callback(callback: CallbackQuery):
             df_list.to_excel(file_path, index=False, header=False)
             document = FSInputFile(file_path)
             await callback.message.answer_document(document, caption="⚠️ **УВАГА!**\nЦе список товарів, яких **не вистачило на складі** (лишки).")
+            logging.info(f"User {user_id} generated a surplus list.")
         except Exception as e:
-            logging.error(f"Помилка при збереженні списку лишків: {e}")
+            logging.error(f"Error saving surplus list for user {user_id}: {e}")
             await callback.message.answer(f"Сталася помилка при збереженні списку лишків: {e}")
         finally:
             if os.path.exists(file_path):
