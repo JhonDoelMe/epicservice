@@ -1,58 +1,115 @@
 import asyncio
+import logging
 import re
 
 import pandas as pd
-from sqlalchemy import bindparam, delete, func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
 from thefuzz import fuzz
 
-from database.engine import async_engine, async_session, sync_session
+from database.engine import async_session, sync_session
 from database.models import Base, Product, SavedList, SavedListItem, TempList
+from lexicon.lexicon import LEXICON  # <-- ИМПОРТИРУЕМ ЛЕКСИКОН
 
 
-# --- Функції імпорту ---
 def _extract_article(name_str: str):
-    match = re.match(r'^(\d{8,})', name_str)
+    match = re.match(r"^(\d{8,})", name_str)
     return match.group(1) if match else None
+
 
 def _sync_smart_import(dataframe: pd.DataFrame):
     try:
         df = dataframe
-        df.rename(columns={'в': 'відділ', 'г': 'група', 'н': 'назва', 'к': 'кількість'}, inplace=True)
-        updated_count, added_count = 0, 0
+        df.rename(
+            columns={"в": "відділ", "г": "група", "н": "назва", "к": "кількість"},
+            inplace=True,
+        )
+
+        file_articles = set()
+        for _, row in df.iterrows():
+            if pd.isna(row["назва"]):
+                continue
+            article = _extract_article(str(row["назва"]))
+            if article:
+                file_articles.add(article)
+
+        articles_in_file_count = len(file_articles)
+        updated_count, added_count, deleted_count = 0, 0, 0
 
         with sync_session() as session:
+            db_products_query = session.execute(select(Product.id, Product.артикул))
+            products_to_delete_ids = []
+            for prod_id, prod_article in db_products_query:
+                if prod_article not in file_articles:
+                    products_to_delete_ids.append(prod_id)
+
+            if products_to_delete_ids:
+                session.execute(delete(Product).where(Product.id.in_(products_to_delete_ids)))
+                deleted_count = len(products_to_delete_ids)
+
             existing_products_query = session.execute(select(Product))
-            existing_products = {p.артикул: p for p in existing_products_query.scalars()}
+            existing_products = {
+                p.артикул: p for p in existing_products_query.scalars()
+            }
 
             for _, row in df.iterrows():
-                if pd.isna(row['назва']) or pd.isna(row['відділ']): continue
-                full_name = str(row['назва'])
+                if pd.isna(row["назва"]) or pd.isna(row["відділ"]):
+                    continue
+                full_name = str(row["назва"])
                 article = _extract_article(full_name)
-                if not article: continue
+                if not article:
+                    continue
 
                 if article in existing_products:
                     product = existing_products[article]
                     product.назва = full_name
-                    product.відділ = int(row['відділ'])
-                    product.група = str(row['група'])
-                    product.кількість = str(row['кількість'])
+                    product.відділ = int(row["відділ"])
+                    product.група = str(row["група"])
+                    product.кількість = str(row["кількість"])
                     updated_count += 1
                 else:
-                    new_product = Product(артикул=article, назва=full_name, відділ=int(row['відділ']), група=str(row['група']), кількість=str(row['кількість']))
+                    new_product = Product(
+                        артикул=article,
+                        назва=full_name,
+                        відділ=int(row["відділ"]),
+                        група=str(row["група"]),
+                        кількість=str(row["кількість"]),
+                    )
                     session.add(new_product)
                     added_count += 1
-            session.commit()
-        
-        return f"✅ Імпорт завершено!\n🔄 Оновлено товарів: {updated_count}\n➕ Додано нових: {added_count}"
-    except Exception as e:
-        return f"❌ Сталася помилка під час запису в БД: {str(e)}"
 
-async def orm_smart_import(dataframe: pd.DataFrame): # Змінено тут
+            session.commit()
+
+            total_in_db = session.execute(select(func.count(Product.id))).scalar_one()
+
+            # --- ФОРМИРУЕМ ОТЧЕТ С ПОМОЩЬЮ LEXICON ---
+            report_lines = [
+                LEXICON.IMPORT_REPORT_TITLE,
+                LEXICON.IMPORT_REPORT_ADDED.format(added=added_count),
+                LEXICON.IMPORT_REPORT_UPDATED.format(updated=updated_count),
+                LEXICON.IMPORT_REPORT_DELETED.format(deleted=deleted_count),
+                LEXICON.IMPORT_REPORT_TOTAL.format(total=total_in_db),
+            ]
+
+            if total_in_db == articles_in_file_count:
+                report_lines.append(LEXICON.IMPORT_REPORT_SUCCESS_CHECK.format(count=articles_in_file_count))
+            else:
+                report_lines.append(LEXICON.IMPORT_REPORT_FAIL_CHECK.format(db_count=total_in_db, file_count=articles_in_file_count))
+
+        return "\n".join(report_lines)
+
+    except Exception as e:
+        logging.error(f"Error during smart import sync: {e}", exc_info=True)
+        return LEXICON.IMPORT_SYNC_ERROR.format(error=str(e))
+
+
+async def orm_smart_import(dataframe: pd.DataFrame):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_smart_import, dataframe)
 
-# --- Функції пошуку ---
+
+# --- Остальной код файла остается без изменений ---
+
 async def orm_find_products(search_query: str):
     async with async_session() as session:
         like_query = f"%{search_query}%"
@@ -85,32 +142,47 @@ async def orm_get_product_by_id(session, product_id: int, for_update: bool = Fal
     result = await session.execute(query)
     return result.scalar_one_or_none()
 
-# --- Функції резервування ---
+
 async def orm_update_reserved_quantity(session, items: list):
     for item in items:
-        product = await orm_get_product_by_id(session, item['product_id'], for_update=True)
+        product = await orm_get_product_by_id(
+            session, item["product_id"], for_update=True
+        )
         if product:
-            product.відкладено = (product.відкладено or 0) + item['quantity']
+            product.відкладено = (product.відкладено or 0) + item["quantity"]
+
 
 async def orm_clear_all_reservations():
     async with async_session() as session:
         await session.execute(update(Product).values(відкладено=0))
         await session.commit()
 
-# --- Функції архіву ---
-async def orm_add_saved_list(user_id: int, file_name: str, file_path: str, items: list, session):
+
+async def orm_add_saved_list(
+    user_id: int, file_name: str, file_path: str, items: list, session
+):
     new_list = SavedList(user_id=user_id, file_name=file_name, file_path=file_path)
     session.add(new_list)
     await session.flush()
     for item in items:
-        list_item = SavedListItem(list_id=new_list.id, article_name=item['article_name'], quantity=item['quantity'])
+        list_item = SavedListItem(
+            list_id=new_list.id,
+            article_name=item["article_name"],
+            quantity=item["quantity"],
+        )
         session.add(list_item)
+
 
 async def orm_get_user_lists_archive(user_id: int):
     async with async_session() as session:
-        query = select(SavedList).where(SavedList.user_id == user_id).order_by(SavedList.created_at.desc())
+        query = (
+            select(SavedList)
+            .where(SavedList.user_id == user_id)
+            .order_by(SavedList.created_at.desc())
+        )
         result = await session.execute(query)
         return result.scalars().all()
+
 
 async def orm_get_all_files_for_user(user_id: int):
     async with async_session() as session:
@@ -118,18 +190,24 @@ async def orm_get_all_files_for_user(user_id: int):
         result = await session.execute(query)
         return result.scalars().all()
 
+
 async def orm_get_users_with_archives():
     async with async_session() as session:
-        query = select(SavedList.user_id, func.count(SavedList.id).label('lists_count')).group_by(SavedList.user_id).order_by(func.count(SavedList.id).desc())
+        query = (
+            select(SavedList.user_id, func.count(SavedList.id).label("lists_count"))
+            .group_by(SavedList.user_id)
+            .order_by(func.count(SavedList.id).desc())
+        )
         result = await session.execute(query)
         return result.all()
 
-# --- Функції тимчасових списків ("кошиків") ---
+
 async def orm_clear_temp_list(user_id: int):
     async with async_session() as session:
         query = delete(TempList).where(TempList.user_id == user_id)
         await session.execute(query)
         await session.commit()
+
 
 async def orm_add_item_to_temp_list(user_id: int, product_id: int, quantity: int):
     async with async_session() as session:
@@ -137,25 +215,33 @@ async def orm_add_item_to_temp_list(user_id: int, product_id: int, quantity: int
         session.add(new_item)
         await session.commit()
 
+
 async def orm_get_temp_list(user_id: int):
     async with async_session() as session:
         query = select(TempList).where(TempList.user_id == user_id).options(selectinload(TempList.product))
         result = await session.execute(query)
         return result.scalars().all()
 
+
 async def orm_get_temp_list_department(user_id: int):
     async with async_session() as session:
-        query = select(TempList).where(TempList.user_id == user_id).options(selectinload(TempList.product)).limit(1)
+        query = (
+            select(TempList)
+            .where(TempList.user_id == user_id)
+            .options(selectinload(TempList.product))
+            .limit(1)
+        )
         result = await session.execute(query)
         first_item = result.scalar_one_or_none()
         return first_item.product.відділ if first_item and first_item.product else None
 
-# --- Синхронні функції для експорту ---
+
 def orm_get_all_products_sync():
     with sync_session() as session:
         query = select(Product).order_by(Product.відділ, Product.назва)
         result = session.execute(query)
         return result.scalars().all()
+
 
 def orm_get_all_temp_list_items_sync():
     with sync_session() as session:
