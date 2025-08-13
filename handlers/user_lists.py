@@ -1,17 +1,15 @@
-import asyncio
 import logging
 import os
-import zipfile
 from datetime import datetime
 
 import pandas as pd
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-from config import ADMIN_IDS
+from config import ADMIN_IDS, ARCHIVES_PATH  # <-- ВОТ ЭТОТ ИМПОРТ БЫЛ ПРОПУЩЕН
 from database.engine import async_session
 from database.orm import (orm_add_item_to_temp_list, orm_add_saved_list,
                           orm_clear_temp_list, orm_get_product_by_id,
@@ -91,7 +89,6 @@ async def my_list_handler(message: Message):
         ]
     )
     await message.answer("\n".join(response_lines), reply_markup=save_button)
-    # Отправляем еще одно сообщение, чтобы обновить reply-клавиатуру, если она "спряталась"
     await message.answer("Меню:", reply_markup=reply_kb)
 
 
