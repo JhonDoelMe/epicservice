@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+from datetime import datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import delete, func, select, update
@@ -304,18 +305,12 @@ def orm_get_all_collected_items_sync():
 
 
 def orm_delete_all_saved_lists_sync():
-    """
-    Удаляет все сохраненные списки из БД и связанные с ними файлы.
-    Возвращает количество удаленных списков.
-    """
     with sync_session() as session:
         lists_count = session.execute(select(func.count(SavedList.id))).scalar_one()
         if lists_count == 0:
             return 0
         
-        # ИСПРАВЛЕНИЕ ЗДЕСЬ: Сначала удаляем дочерние записи
         session.execute(delete(SavedListItem))
-        # Затем удаляем родительские
         session.execute(delete(SavedList))
         session.commit()
         
@@ -323,3 +318,47 @@ def orm_delete_all_saved_lists_sync():
             shutil.rmtree(ARCHIVES_PATH)
         
         return lists_count
+
+
+def orm_get_users_for_warning_sync(hours_warn: int, hours_expire: int) -> set[int]:
+    with sync_session() as session:
+        warn_time = datetime.now() - timedelta(hours=hours_warn)
+        expire_time = datetime.now() - timedelta(hours=hours_expire)
+
+        query = (
+            select(SavedList.user_id)
+            .where(SavedList.created_at < warn_time, SavedList.created_at > expire_time)
+            .distinct()
+        )
+        result = session.execute(query).scalars().all()
+        return set(result)
+
+
+def orm_delete_lists_older_than_sync(hours: int) -> int:
+    with sync_session() as session:
+        expire_time = datetime.now() - timedelta(hours=hours)
+        
+        query = select(SavedList).where(SavedList.created_at < expire_time)
+        lists_to_delete = session.execute(query).scalars().all()
+        
+        if not lists_to_delete:
+            return 0
+            
+        count = len(lists_to_delete)
+        list_ids_to_delete = [lst.id for lst in lists_to_delete]
+        
+        for lst in lists_to_delete:
+            if os.path.exists(lst.file_path):
+                try:
+                    user_dir = os.path.dirname(lst.file_path)
+                    os.remove(lst.file_path)
+                    if not os.listdir(user_dir):
+                        os.rmdir(user_dir)
+                except OSError as e:
+                    logging.error(f"Error deleting archive file or dir {lst.file_path}: {e}")
+
+        session.execute(delete(SavedListItem).where(SavedListItem.list_id.in_(list_ids_to_delete)))
+        session.execute(delete(SavedList).where(SavedList.id.in_(list_ids_to_delete)))
+        
+        session.commit()
+        return count

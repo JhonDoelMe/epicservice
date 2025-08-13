@@ -48,3 +48,4 @@ thefuzz==0.22.1
 alembic==1.13.2
 black==24.4.2
 isort==5.13.2
+apscheduler==3.10.4
