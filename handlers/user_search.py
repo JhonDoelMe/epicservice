@@ -2,7 +2,8 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
 
 from database.engine import async_session
-from database.orm import orm_find_products, orm_get_product_by_id
+from database.orm import (orm_find_products, orm_get_product_by_id,
+                          orm_get_temp_list_item_quantity)
 from keyboards.inline import get_product_actions_kb, get_search_results_kb
 from lexicon.lexicon import LEXICON
 
@@ -10,7 +11,7 @@ router = Router()
 
 
 def format_quantity(quantity_str: str):
-    """Форматує кількість, прибираючи .0 для цілих чисел."""
+    """Форматирует количество, убирая .0 для целых чисел."""
     try:
         quantity_float = float(quantity_str)
         return int(quantity_float) if quantity_float.is_integer() else quantity_float
@@ -58,24 +59,35 @@ async def show_product_from_button(callback: CallbackQuery):
 
 async def show_product_card(message: Message, product):
     """
-    Формує та відправляє картку товару з інформацією про доступність та кнопками дій.
+    Формирует и отправляет карточку товара, учитывая товары во временном списке пользователя.
     """
+    user_id = message.chat.id
+    
+    in_temp_list_quantity = await orm_get_temp_list_item_quantity(user_id, product.id)
+
     try:
         stock_quantity = float(product.кількість)
-        reserved_quantity = product.відкладено or 0
-        available_quantity = stock_quantity - reserved_quantity
+        permanently_reserved = product.відкладено or 0
+        
+        available_quantity = stock_quantity - permanently_reserved - in_temp_list_quantity
+        
+        total_reserved = permanently_reserved + in_temp_list_quantity
+
         display_available = format_quantity(str(available_quantity))
         int_available = int(available_quantity)
+        display_total_reserved = format_quantity(str(total_reserved))
+
     except (ValueError, TypeError):
         display_available = product.кількість
         int_available = 0
+        display_total_reserved = (product.відкладено or 0) + in_temp_list_quantity
 
     card_text = LEXICON.PRODUCT_CARD_TEMPLATE.format(
         name=product.назва,
         department=product.відділ,
         group=product.група,
         available=display_available,
-        reserved=product.відкладено or 0,
+        reserved=display_total_reserved,
     )
 
     await message.answer(

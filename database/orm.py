@@ -9,7 +9,7 @@ from thefuzz import fuzz
 
 from database.engine import async_session, sync_session
 from database.models import Base, Product, SavedList, SavedListItem, TempList
-from lexicon.lexicon import LEXICON  # <-- ИМПОРТИРУЕМ ЛЕКСИКОН
+from lexicon.lexicon import LEXICON
 
 
 def _extract_article(name_str: str):
@@ -82,7 +82,6 @@ def _sync_smart_import(dataframe: pd.DataFrame):
 
             total_in_db = session.execute(select(func.count(Product.id))).scalar_one()
 
-            # --- ФОРМИРУЕМ ОТЧЕТ С ПОМОЩЬЮ LEXICON ---
             report_lines = [
                 LEXICON.IMPORT_REPORT_TITLE,
                 LEXICON.IMPORT_REPORT_ADDED.format(added=added_count),
@@ -107,8 +106,6 @@ async def orm_smart_import(dataframe: pd.DataFrame):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_smart_import, dataframe)
 
-
-# --- Остальной код файла остается без изменений ---
 
 async def orm_find_products(search_query: str):
     async with async_session() as session:
@@ -234,6 +231,20 @@ async def orm_get_temp_list_department(user_id: int):
         result = await session.execute(query)
         first_item = result.scalar_one_or_none()
         return first_item.product.відділ if first_item and first_item.product else None
+
+
+async def orm_get_temp_list_item_quantity(user_id: int, product_id: int) -> int:
+    """
+    Возвращает количество конкретного товара во временном списке пользователя.
+    """
+    async with async_session() as session:
+        query = (
+            select(func.sum(TempList.quantity))
+            .where(TempList.user_id == user_id, TempList.product_id == product_id)
+        )
+        result = await session.execute(query)
+        quantity = result.scalar_one_or_none()
+        return quantity or 0
 
 
 def orm_get_all_products_sync():
