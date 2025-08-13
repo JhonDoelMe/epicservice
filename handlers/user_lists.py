@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-from config import ADMIN_IDS, ARCHIVES_PATH  # <-- ВОТ ЭТОТ ИМПОРТ БЫЛ ПРОПУЩЕН
+from config import ADMIN_IDS, ARCHIVES_PATH
 from database.engine import async_session
 from database.orm import (orm_add_item_to_temp_list, orm_add_saved_list,
                           orm_clear_temp_list, orm_get_product_by_id,
@@ -83,13 +83,14 @@ async def my_list_handler(message: Message):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="💾 Зберегти та відкласти", callback_data="save_list"
+                    text=LEXICON.SAVE_LIST_BUTTON, callback_data="save_list"
                 )
             ]
         ]
     )
     await message.answer("\n".join(response_lines), reply_markup=save_button)
-    await message.answer("Меню:", reply_markup=reply_kb)
+    # Отправляем невидимое сообщение, чтобы обновить клавиатуру
+    await message.answer(" ", reply_markup=reply_kb)
 
 
 @router.callback_query(F.data.startswith("add_all:"))
