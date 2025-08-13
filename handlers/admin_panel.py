@@ -15,7 +15,8 @@ from database.orm import (orm_clear_all_reservations, orm_get_all_files_for_user
                           orm_get_all_products_sync,
                           orm_get_all_temp_list_items_sync,
                           orm_get_user_lists_archive,
-                          orm_get_users_with_archives, orm_smart_import)
+                          orm_get_users_with_archives, orm_smart_import,
+                          orm_get_all_collected_items_sync)
 from keyboards.inline import (get_admin_panel_kb, get_archive_kb,
                               get_users_with_archives_kb)
 from keyboards.reply import admin_main_kb, cancel_kb
@@ -263,6 +264,56 @@ async def export_stock_handler(callback: CallbackQuery):
         logging.error(f"Failed to create stock balance report for admin {admin_id}.")
         await callback.message.answer(LEXICON.STOCK_REPORT_ERROR)
 
+    await callback.message.answer(
+        LEXICON.ADMIN_PANEL_GREETING, reply_markup=get_admin_panel_kb()
+    )
+    await callback.answer()
+
+
+def _sync_export_collected_report():
+    collected_items = orm_get_all_collected_items_sync()
+    if not collected_items:
+        return None
+
+    sorted_items = sorted(collected_items, key=lambda x: (x['department'], x['group'], x['name']))
+    
+    export_data = [{
+        'Відділ': item['department'],
+        'Група': item['group'],
+        'Назва': item['name'],
+        'Зібрано (кількість)': item['quantity']
+    } for item in sorted_items]
+    
+    df = pd.DataFrame(export_data)
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    file_name = f"collected_summary_{timestamp}.xlsx"
+    temp_dir = "temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    file_path = os.path.join(temp_dir, file_name)
+    
+    df.to_excel(file_path, index=False)
+    return file_path
+
+
+@router.callback_query(F.data == "admin:export_collected")
+async def export_collected_handler(callback: CallbackQuery):
+    admin_id = callback.from_user.id
+    logging.info(f"Admin {admin_id} initiated collected items summary export.")
+    await callback.message.edit_text(LEXICON.COLLECTED_REPORT_PROCESSING)
+    
+    loop = asyncio.get_running_loop()
+    file_path = await loop.run_in_executor(None, _sync_export_collected_report)
+
+    if file_path and os.path.exists(file_path):
+        document = FSInputFile(file_path)
+        await callback.message.answer_document(document, caption=LEXICON.COLLECTED_REPORT_CAPTION)
+        logging.info(f"Admin {admin_id} successfully exported collected items summary.")
+        os.remove(file_path)
+    else:
+        logging.warning(f"No collected items found for admin {admin_id} report.")
+        await callback.message.answer(LEXICON.COLLECTED_REPORT_EMPTY)
+        
     await callback.message.answer(
         LEXICON.ADMIN_PANEL_GREETING, reply_markup=get_admin_panel_kb()
     )

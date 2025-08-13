@@ -1,5 +1,5 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from lexicon.lexicon import LEXICON
 
 def get_admin_panel_kb():
     """Повертає головну клавіатуру адмін-панелі."""
@@ -7,6 +7,7 @@ def get_admin_panel_kb():
         inline_keyboard=[
             [InlineKeyboardButton(text="📥 Імпорт товарів з Excel", callback_data="admin:import_products")],
             [InlineKeyboardButton(text="📊 Вивантажити залишки", callback_data="admin:export_stock")],
+            [InlineKeyboardButton(text=LEXICON.EXPORT_COLLECTED_BUTTON, callback_data="admin:export_collected")],
             [InlineKeyboardButton(text="👥 Архіви користувачів", callback_data="admin:user_archives")]
         ]
     )
@@ -41,7 +42,6 @@ def get_search_results_kb(products: list):
         ])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-# --- ОНОВЛЕНА ФУНКЦІЯ ДЛЯ КНОПОК ДІЙ ---
 def get_product_actions_kb(product_id: int, available_quantity: int):
     """
     Створює кнопки дій для картки товару:
@@ -50,7 +50,6 @@ def get_product_actions_kb(product_id: int, available_quantity: int):
     """
     keyboard = []
     
-    # Додаємо кнопку "Додати все", тільки якщо є що додавати
     if available_quantity > 0:
         keyboard.append([
             InlineKeyboardButton(
@@ -59,19 +58,15 @@ def get_product_actions_kb(product_id: int, available_quantity: int):
             )
         ])
     
-    # Кнопка для введення своєї кількості
     keyboard.append([
         InlineKeyboardButton(text="📝 Ввести іншу кількість", callback_data=f"add_custom:{product_id}")
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-# --- НОВА УНІВЕРСАЛЬНА ФУНКЦІЯ ---
 def get_confirmation_kb(confirm_callback: str, cancel_callback: str):
     """
     Створює клавіатуру підтвердження (Так/Ні).
-    :param confirm_callback: callback_data для кнопки "Так"
-    :param cancel_callback: callback_data для кнопки "Ні"
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[

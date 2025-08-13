@@ -205,13 +205,9 @@ async def orm_clear_temp_list(user_id: int):
         await session.execute(query)
         await session.commit()
 
-# --- ИЗМЕНЕННАЯ ФУНКЦИЯ ---
+
 async def orm_add_item_to_temp_list(user_id: int, product_id: int, quantity: int):
-    """
-    Добавляет товар во временный список. Если товар уже есть, обновляет его количество.
-    """
     async with async_session() as session:
-        # Проверяем, есть ли уже такой товар в списке
         query = select(TempList).where(
             TempList.user_id == user_id, TempList.product_id == product_id
         )
@@ -219,10 +215,8 @@ async def orm_add_item_to_temp_list(user_id: int, product_id: int, quantity: int
         existing_item = result.scalar_one_or_none()
 
         if existing_item:
-            # Если есть - обновляем количество
             existing_item.quantity += quantity
         else:
-            # Если нет - создаем новую запись
             new_item = TempList(
                 user_id=user_id, product_id=product_id, quantity=quantity
             )
@@ -274,3 +268,33 @@ def orm_get_all_temp_list_items_sync():
         query = select(TempList)
         result = session.execute(query)
         return result.scalars().all()
+
+
+def orm_get_all_collected_items_sync():
+    with sync_session() as session:
+        all_products_query = select(Product)
+        all_products = session.execute(all_products_query).scalars().all()
+        products_dict = {p.артикул: p for p in all_products}
+
+        all_saved_items_query = select(SavedListItem)
+        all_saved_items = session.execute(all_saved_items_query).scalars().all()
+
+        collected_data = {}
+        for item in all_saved_items:
+            article = _extract_article(item.article_name)
+            if not article or article not in products_dict:
+                continue
+
+            product_info = products_dict[article]
+            
+            if article in collected_data:
+                collected_data[article]["quantity"] += item.quantity
+            else:
+                collected_data[article] = {
+                    "department": product_info.відділ,
+                    "group": product_info.група,
+                    "name": product_info.назва,
+                    "quantity": item.quantity,
+                }
+        
+        return list(collected_data.values())
