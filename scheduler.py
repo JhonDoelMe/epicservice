@@ -1,74 +1,108 @@
-# scheduler.py
 import logging
 from datetime import datetime, timedelta
+from typing import Optional
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.job import Job
 
 from database.orm import (orm_delete_lists_older_than_sync,
-                          orm_get_users_for_warning_sync)
+                         orm_get_users_for_warning_sync)
 from lexicon.lexicon import LEXICON
 
+# Налаштування логування
+logger = logging.getLogger(__name__)
 
-async def send_deletion_warnings(bot: Bot):
-    """Отправляет предупреждения пользователям, чьи списки скоро будут удалены."""
-    logging.info("Scheduler: Running job 'send_deletion_warnings'.")
+# Конфігурація планувальника
+WARNING_HOURS = 36
+DELETION_HOURS = 48
+WARNING_INTERVAL_HOURS = 2
+CLEANUP_TIME = {"hour": 4, "minute": 0}
+
+async def send_deletion_warnings(bot: Bot) -> None:
+    """
+    Надсилає попередження користувачам, чиї списки будуть скоро видалені.
     
-    # Получаем ID пользователей, которых нужно предупредить
-    user_ids = orm_get_users_for_warning_sync(
-        hours_warn=36, hours_expire=48
-    )
+    Args:
+        bot: Екземпляр бота для відправки повідомлень
+    """
+    logger.info("Запуск завдання: відправка попереджень про видалення")
     
-    if not user_ids:
-        logging.info("Scheduler: No users found for deletion warning.")
-        return
+    try:
+        user_ids = orm_get_users_for_warning_sync(
+            hours_warn=WARNING_HOURS,
+            hours_expire=DELETION_HOURS
+        )
+        
+        if not user_ids:
+            logger.info("Користувачів для попередження не знайдено")
+            return
 
-    logging.info(f"Scheduler: Found {len(user_ids)} users to warn.")
-    count = 0
-    for user_id in user_ids:
-        try:
-            await bot.send_message(user_id, LEXICON.DELETE_WARNING_MESSAGE)
-            count += 1
-        except Exception as e:
-            # Логируем ошибку, если не смогли отправить сообщение (например, бот заблокирован)
-            logging.error(f"Scheduler: Failed to send warning to user {user_id}. Error: {e}")
-    logging.info(f"Scheduler: Successfully sent warnings to {count} users.")
+        logger.info("Знайдено %s користувачів для попередження", len(user_ids))
+        success_count = 0
+        
+        for user_id in user_ids:
+            try:
+                await bot.send_message(user_id, LEXICON.DELETE_WARNING_MESSAGE)
+                success_count += 1
+            except Exception as e:
+                logger.warning(
+                    "Не вдалося надіслати попередження користувачу %s: %s",
+                    user_id, e
+                )
 
+        logger.info("Успішно надіслано %s попереджень", success_count)
+    except Exception as e:
+        logger.critical("Критична помилка при відправці попереджень: %s", e)
 
-async def perform_full_cleanup():
-    """Полностью удаляет старые списки (старше 48 часов)."""
-    logging.warning("!!!SCHEDULER ACTION!!! Running job 'perform_full_cleanup'.")
+async def perform_full_cleanup() -> None:
+    """Виконує повне очищення старих списків."""
+    logger.warning("Запуск завдання: очищення старих списків")
     
-    # Вызываем функцию удаления и получаем количество удаленных списков
-    deleted_count = orm_delete_lists_older_than_sync(hours=48)
+    try:
+        deleted_count = orm_delete_lists_older_than_sync(hours=DELETION_HOURS)
+        
+        if deleted_count > 0:
+            logger.warning("Видалено %s старих списків", deleted_count)
+        else:
+            logger.info("Старі списки для видалення відсутні")
+    except Exception as e:
+        logger.critical("Критична помилка при очищенні списків: %s", e)
+
+def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
+    """
+    Налаштовує та запускає планувальник завдань.
     
-    if deleted_count > 0:
-        logging.warning(f"Scheduler: Successfully deleted {deleted_count} lists older than 48 hours.")
-    else:
-        logging.info("Scheduler: No old lists to delete.")
-
-
-def setup_scheduler(bot: Bot):
-    """Настраивает и запускает все запланированные задачи."""
+    Args:
+        bot: Екземпляр бота для передачі в завдання
+        
+    Returns:
+        Налаштований екземпляр планувальника
+    """
     scheduler = AsyncIOScheduler(timezone="Europe/Kiev")
 
-    # Задача №1: Отправка предупреждений.
-    # Запускается каждые 2 часа.
-    scheduler.add_job(
-        send_deletion_warnings,
-        "interval",
-        hours=2,
-        args=[bot],
-        next_run_time=datetime.now() # Запустить сразу при старте
-    )
+    try:
+        # Завдання попереджень
+        scheduler.add_job(
+            send_deletion_warnings,
+            "interval",
+            hours=WARNING_INTERVAL_HOURS,
+            args=[bot],
+            next_run_time=datetime.now(),
+            id="deletion_warnings"
+        )
 
-    # Задача №2: Полная очистка.
-    # Запускается один раз в сутки, в 4 часа утра.
-    scheduler.add_job(
-        perform_full_cleanup,
-        "cron",
-        hour=4,
-        minute=0
-    )
-    
+        # Завдання очищення
+        scheduler.add_job(
+            perform_full_cleanup,
+            "cron",
+            **CLEANUP_TIME,
+            id="daily_cleanup"
+        )
+        
+        logger.info("Планувальник успішно налаштовано")
+    except Exception as e:
+        logger.critical("Помилка налаштування планувальника: %s", e)
+        raise
+
     return scheduler
