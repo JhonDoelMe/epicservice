@@ -2,7 +2,7 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 from lexicon.lexicon import LEXICON
 
-# Клавіатура для звичайного користувача
+# --- Головна клавіатура для звичайного користувача ---
 user_main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -11,11 +11,12 @@ user_main_kb = ReplyKeyboardMarkup(
         ],
         [KeyboardButton(text=LEXICON.BUTTON_ARCHIVE)],
     ],
-    resize_keyboard=True,
-    input_field_placeholder=LEXICON.PLACEHOLDER_USER,
+    resize_keyboard=True, # Адаптує розмір клавіатури
+    input_field_placeholder=LEXICON.PLACEHOLDER_USER, # Текст-підказка в полі вводу
 )
 
-# Клавіатура для адміністратора
+# --- Головна клавіатура для адміністратора ---
+# Відрізняється наявністю кнопки для входу в адмін-панель.
 admin_main_kb = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -31,7 +32,10 @@ admin_main_kb = ReplyKeyboardMarkup(
     input_field_placeholder=LEXICON.PLACEHOLDER_ADMIN,
 )
 
-# Клавіатура для скасування дії (для FSM станів)
+# --- Універсальна клавіатура для скасування дії ---
+# Використовується в сценаріях FSM (машини скінченних автоматів),
+# щоб надати користувачу можливість вийти з поточного стану.
 cancel_kb = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text=LEXICON.BUTTON_CANCEL)]], resize_keyboard=True
+    keyboard=[[KeyboardButton(text=LEXICON.BUTTON_CANCEL)]],
+    resize_keyboard=True
 )

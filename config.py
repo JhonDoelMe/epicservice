@@ -4,47 +4,82 @@ from typing import List
 
 from dotenv import load_dotenv
 
-# Налаштування логування
+# Налаштування логера для цього модуля
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Завантаження .env файла
+# Завантажуємо змінні оточення з файлу .env
+# Функція поверне True, якщо файл .env було знайдено та завантажено.
 if not load_dotenv():
-    logger.warning("Не вдалося завантажити .env файл або він відсутній")
+    logger.warning("Файл .env не знайдено або не вдалося завантажити. Використовуються системні змінні оточення.")
 
 def get_required_env(var_name: str) -> str:
-    """Отримання обов'язкової змінної оточення"""
+    """
+    Отримує значення обов'язкової змінної оточення.
+
+    Args:
+        var_name: Назва змінної.
+
+    Raises:
+        ValueError: Якщо змінна оточення відсутня.
+
+    Returns:
+        Значення змінної у вигляді рядка.
+    """
     value = os.getenv(var_name)
     if not value:
-        logger.critical(f"Відсутня обов'язкова змінна оточення: {var_name}")
-        raise ValueError(f"Відсутня обов'язкова змінна оточення: {var_name}")
+        error_msg = f"Критична помилка: відсутня обов'язкова змінна оточення: {var_name}"
+        logger.critical(error_msg)
+        raise ValueError(error_msg)
     return value
 
-# --- BOT ---
+# --- Конфігурація Бота ---
 BOT_TOKEN = get_required_env("BOT_TOKEN")
 
-# Безпечний парсинг ADMIN_IDS
 def get_admin_ids() -> List[int]:
-    """Отримання списку ID адміністраторів"""
+    """
+    Безпечно парсить та повертає список ID адміністраторів зі змінної оточення.
+
+    Очікує рядок формату 'ID1,ID2,ID3'. Ігнорує пусті значення та пробіли.
+    У разі помилки формату повертає порожній список.
+
+    Returns:
+        Список цілих чисел (ID адміністраторів).
+    """
     admin_ids_str = os.getenv("ADMIN_IDS", "")
+    if not admin_ids_str:
+        logger.warning("Змінна ADMIN_IDS не задана. Адмін-панель буде недоступна.")
+        return []
     try:
-        return [int(admin_id) for admin_id in admin_ids_str.split(',') if admin_id]
-    except (ValueError, TypeError) as e:
+        # Розділяємо рядок по комі, видаляємо пробіли і перетворюємо на числа
+        return [int(admin_id.strip()) for admin_id in admin_ids_str.split(',') if admin_id.strip()]
+    except ValueError as e:
         logger.warning(
-            "ADMIN_IDS не вдалося завантажити. Перевірте формат у .env файлі. "
-            "Очікується 'ID1,ID2,ID3'. Помилка: %s", e
+            "Некоректний формат ADMIN_IDS. Перевірте ваш .env файл. "
+            "Очікується числовий формат 'ID1,ID2,ID3'. Помилка: %s", e
         )
         return []
 
 ADMIN_IDS = get_admin_ids()
 
-# --- DATABASE ---
-def validate_db_port(port: str) -> int:
-    """Валідація порту бази даних"""
+# --- Конфігурація Бази Даних ---
+def validate_db_port(port_str: str) -> int:
+    """
+    Валідує порт бази даних.
+
+    Args:
+        port_str: Порт у вигляді рядка.
+
+    Raises:
+        ValueError: Якщо порт не є числом або виходить за межі допустимого діапазону.
+
+    Returns:
+        Порт у вигляді цілого числа.
+    """
     try:
-        port_int = int(port)
-        if not 0 < port_int < 65536:
-            raise ValueError("Порт повинен бути в діапазоні 1-65535")
+        port_int = int(port_str)
+        if not 1 <= port_int <= 65535:
+            raise ValueError("Порт бази даних повинен бути в діапазоні від 1 до 65535.")
         return port_int
     except ValueError as e:
         logger.critical("Невірний формат порту БД: %s", e)
@@ -56,8 +91,12 @@ DB_HOST = get_required_env("DB_HOST")
 DB_PORT = validate_db_port(get_required_env("DB_PORT"))
 DB_NAME = get_required_env("DB_NAME")
 
+# Формуємо URL для підключення до БД (асинхронний та синхронний варіанти)
+# Асинхронний драйвер, використовується основним додатком бота
 DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Синхронний драйвер, використовується для Alembic міграцій та деяких фонових завдань
 SYNC_DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-# --- STORAGE ---
+# --- Конфігурація Сховища ---
+# Шлях до папки, де будуть зберігатися архіви
 ARCHIVES_PATH = "archives"

@@ -5,12 +5,14 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
+    """Базовий клас для декларативних моделей SQLAlchemy."""
     pass
 
 class Product(Base):
+    """Модель, що представляє товар на складі."""
     __tablename__ = 'products'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    артикул: Mapped[str] = mapped_column(String(20), unique=True, index=True)  # Виправлено: закриваюча дужка після String(20)
+    артикул: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     назва: Mapped[str] = mapped_column(String(255))
     відділ: Mapped[int] = mapped_column(BigInteger)
     група: Mapped[str] = mapped_column(String(100))
@@ -18,6 +20,7 @@ class Product(Base):
     відкладено: Mapped[int] = mapped_column(Integer, default=0)
 
 class SavedList(Base):
+    """Модель, що представляє збережений список товарів користувача."""
     __tablename__ = 'saved_lists'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
@@ -27,6 +30,7 @@ class SavedList(Base):
     items: Mapped[List["SavedListItem"]] = relationship(back_populates="saved_list", cascade="all, delete-orphan")
 
 class SavedListItem(Base):
+    """Модель, що представляє один пункт у збереженому списку."""
     __tablename__ = 'saved_list_items'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     list_id: Mapped[int] = mapped_column(ForeignKey('saved_lists.id'))
@@ -35,6 +39,7 @@ class SavedListItem(Base):
     saved_list: Mapped["SavedList"] = relationship(back_populates="items")
 
 class TempList(Base):
+    """Модель, що представляє тимчасовий (поточний) список товарів користувача."""
     __tablename__ = 'temp_lists'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
