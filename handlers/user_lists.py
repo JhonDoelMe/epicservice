@@ -1,30 +1,36 @@
+import asyncio
 import logging
 import os
+import zipfile
+from datetime import datetime
 
 import pandas as pd
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-from config import ARCHIVES_PATH
+from config import ADMIN_IDS, ARCHIVES_PATH
+from database.orm import (orm_clear_all_reservations, orm_get_all_files_for_user,
+                          orm_get_all_products_sync,
+                          orm_get_all_temp_list_items_sync,
+                          orm_get_user_lists_archive,
+                          orm_get_users_with_archives, orm_smart_import,
+                          orm_get_product_by_id, orm_get_temp_list_department,
+                          orm_add_item_to_temp_list, orm_update_reserved_quantity,
+                          orm_add_saved_list, orm_clear_temp_list, orm_get_temp_list)
 from database.engine import async_session
-from database.orm import (orm_add_item_to_temp_list, orm_add_saved_list,
-                          orm_clear_temp_list, orm_get_product_by_id,
-                          orm_get_temp_list, orm_get_temp_list_department,
-                          orm_update_reserved_quantity)
-from keyboards.inline import get_confirmation_kb
-from keyboards.reply import cancel_kb, user_main_kb
+from keyboards.inline import (get_admin_panel_kb, get_archive_kb,
+                              get_users_with_archives_kb, get_confirmation_kb)
+from keyboards.reply import admin_main_kb, cancel_kb, user_main_kb
 from lexicon.lexicon import LEXICON
 
 router = Router()
 
-
 class ListStates(StatesGroup):
     waiting_for_quantity = State()
     confirm_new_list = State()
-
 
 @router.message(F.text == "Новий список")
 async def new_list_handler(message: Message, state: FSMContext):
@@ -34,7 +40,6 @@ async def new_list_handler(message: Message, state: FSMContext):
         reply_markup=get_confirmation_kb("confirm_new_list", "cancel_new_list"),
     )
     await state.set_state(ListStates.confirm_new_list)
-
 
 @router.callback_query(ListStates.confirm_new_list, F.data == "confirm_new_list")
 async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
@@ -46,14 +51,12 @@ async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
-
 @router.callback_query(ListStates.confirm_new_list, F.data == "cancel_new_list")
 async def new_list_canceled(callback: CallbackQuery, state: FSMContext):
     """Обробляє скасування створення нового списку."""
     await callback.message.edit_text(LEXICON.ACTION_CANCELED)
     await state.clear()
     await callback.answer()
-
 
 @router.message(F.text == "Мій список")
 async def my_list_handler(message: Message):
@@ -88,7 +91,6 @@ async def my_list_handler(message: Message):
         ]
     )
     await message.answer("\n".join(response_lines), reply_markup=save_button)
-
 
 @router.callback_query(F.data.startswith("add_all:"))
 async def add_all_callback(callback: CallbackQuery):
@@ -126,7 +128,6 @@ async def add_all_callback(callback: CallbackQuery):
         )
     await callback.answer()
 
-
 @router.callback_query(F.data.startswith("add_custom:"))
 async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -154,12 +155,10 @@ async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ListStates.waiting_for_quantity)
     await callback.answer()
 
-
 @router.message(ListStates.waiting_for_quantity, F.text == "❌ Скасувати")
 async def cancel_quantity_input(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(LEXICON.CANCEL_ACTION, reply_markup=user_main_kb)
-
 
 @router.message(ListStates.waiting_for_quantity, F.text.isdigit())
 async def process_quantity(message: Message, state: FSMContext):
@@ -180,7 +179,6 @@ async def process_quantity(message: Message, state: FSMContext):
         reply_markup=user_main_kb,
     )
     await state.clear()
-
 
 @router.callback_query(F.data == "save_list")
 async def save_list_callback(callback: CallbackQuery):
@@ -250,7 +248,9 @@ async def save_list_callback(callback: CallbackQuery):
 
     if in_stock_list:
         first_article_name = in_stock_list[0].product.артикул
-        file_name = f"{first_article_name}.xlsx"
+        timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M")
+        file_name = f"{first_article_name}_{timestamp}.xlsx"
+        
         archive_dir = os.path.join(ARCHIVES_PATH, f"user_{user_id}")
         os.makedirs(archive_dir, exist_ok=True)
         file_path = os.path.join(archive_dir, file_name)
@@ -283,7 +283,9 @@ async def save_list_callback(callback: CallbackQuery):
 
     if surplus_list:
         first_article_name = surplus_list[0].product.артикул
-        file_name = f"{first_article_name}-лишки.xlsx"
+        timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M")
+        file_name = f"{first_article_name}-лишки_{timestamp}.xlsx"
+        
         file_path = f"temp_{file_name}"
         excel_data = [
             {"артикул": item.product.артикул, "кількість": item.quantity}
