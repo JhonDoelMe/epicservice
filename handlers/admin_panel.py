@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import zipfile
 from datetime import datetime
 
@@ -11,13 +12,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, Message
 
 from config import ADMIN_IDS, ARCHIVES_PATH
-from database.orm import (orm_clear_all_reservations, orm_get_all_files_for_user,
+from database.orm import (orm_clear_all_reservations, orm_delete_all_saved_lists_sync,
+                          orm_get_all_collected_items_sync,
+                          orm_get_all_files_for_user,
                           orm_get_all_products_sync,
                           orm_get_all_temp_list_items_sync,
                           orm_get_user_lists_archive,
-                          orm_get_users_with_archives, orm_smart_import,
-                          orm_get_all_collected_items_sync)
+                          orm_get_users_with_archives, orm_smart_import)
 from keyboards.inline import (get_admin_panel_kb, get_archive_kb,
+                              get_confirmation_kb,
                               get_users_with_archives_kb)
 from keyboards.reply import admin_main_kb, cancel_kb
 from lexicon.lexicon import LEXICON
@@ -29,6 +32,7 @@ router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 class AdminStates(StatesGroup):
     waiting_for_import_file = State()
+    confirm_delete_all_lists = State()
 
 
 @router.message(F.text == "👑 Адмін-панель")
@@ -37,7 +41,9 @@ async def admin_panel_handler(message: Message):
 
 
 @router.callback_query(F.data == "admin:main")
-async def admin_panel_callback_handler(callback: CallbackQuery):
+async def admin_panel_callback_handler(callback: CallbackQuery, state: FSMContext):
+    if await state.get_state():
+        await state.clear()
     await callback.message.edit_text(
         LEXICON.ADMIN_PANEL_GREETING, reply_markup=get_admin_panel_kb()
     )
@@ -314,6 +320,50 @@ async def export_collected_handler(callback: CallbackQuery):
         logging.warning(f"No collected items found for admin {admin_id} report.")
         await callback.message.answer(LEXICON.COLLECTED_REPORT_EMPTY)
         
+    await callback.message.answer(
+        LEXICON.ADMIN_PANEL_GREETING, reply_markup=get_admin_panel_kb()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:delete_all_lists")
+async def delete_all_lists_confirm_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
+        LEXICON.DELETE_ALL_LISTS_CONFIRM,
+        reply_markup=get_confirmation_kb(
+            "confirm_delete_all_yes", "confirm_delete_all_no"
+        ),
+    )
+    await state.set_state(AdminStates.confirm_delete_all_lists)
+    await callback.answer()
+
+
+@router.callback_query(AdminStates.confirm_delete_all_lists, F.data == "confirm_delete_all_yes")
+async def delete_all_lists_confirmed_handler(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    admin_id = callback.from_user.id
+    logging.warning(f"!!!ADMIN ACTION!!! Admin {admin_id} confirmed deletion of ALL saved lists.")
+    
+    loop = asyncio.get_running_loop()
+    deleted_count = await loop.run_in_executor(None, orm_delete_all_saved_lists_sync)
+    
+    if deleted_count > 0:
+        await callback.message.edit_text(LEXICON.DELETE_ALL_LISTS_SUCCESS.format(count=deleted_count))
+        logging.warning(f"Admin {admin_id} successfully deleted {deleted_count} lists and all archive files.")
+    else:
+        await callback.message.edit_text(LEXICON.NO_LISTS_TO_DELETE)
+
+    await callback.message.answer(
+        LEXICON.ADMIN_PANEL_GREETING, reply_markup=get_admin_panel_kb()
+    )
+    await callback.answer()
+
+
+@router.callback_query(AdminStates.confirm_delete_all_lists, F.data == "confirm_delete_all_no")
+async def delete_all_lists_cancelled_handler(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text(LEXICON.DELETE_ALL_LISTS_CANCELLED)
+    
     await callback.message.answer(
         LEXICON.ADMIN_PANEL_GREETING, reply_markup=get_admin_panel_kb()
     )

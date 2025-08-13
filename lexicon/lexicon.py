@@ -20,6 +20,7 @@ class Lexicon:
     BUTTON_IMPORT_PRODUCTS = "📥 Імпорт товарів з Excel"
     BUTTON_EXPORT_STOCK = "📊 Вивантажити залишки"
     BUTTON_USER_ARCHIVES = "👥 Архіви користувачів"
+    BUTTON_DELETE_ALL_LISTS = "🗑️ Видалити всі списки" # <-- НОВАЯ СТРОКА
     BUTTON_USER_LIST_ITEM = "Користувач {user_id} (списκів: {lists_count})"
     BUTTON_BACK_TO_ADMIN_PANEL = "⬅️ Назад до адмін-панелі"
     BUTTON_PACK_IN_ZIP = "📦 Запакувати все в ZIP-архів"
@@ -97,6 +98,10 @@ class Lexicon:
     IMPORT_REPORT_TOTAL = "🗃️ *Всього артикулів у базі:* {total}"
     IMPORT_REPORT_SUCCESS_CHECK = "✅ *Перевірка пройшла успішно:* кількість у базі співпадає з файлом ({count})."
     IMPORT_REPORT_FAIL_CHECK = "⚠️ *Увага, розбіжність:* у базі {db_count}, а у файлі {file_count} унікальних артикулів."
+    DELETE_ALL_LISTS_CONFIRM = "🔴 **УВАГА!**\n\nВи збираєтесь видалити **ВСІ** збережені списки **ВСІХ** користувачів та їхні файли. Ця дія **НЕЗВОРОТНЯ**.\n\nВи впевнені?"
+    DELETE_ALL_LISTS_SUCCESS = "✅ Всі збережені списки ({count} шт.) та їхні файли було успішно видалено."
+    DELETE_ALL_LISTS_CANCELLED = "Дію скасовано. Всі списки на місці."
+    NO_LISTS_TO_DELETE = "Немає збережених списків для видалення."
     NO_USERS_WITH_ARCHIVES = "Жоден користувач ще не зберіг списку."
     CHOOSE_USER_TO_VIEW_ARCHIVE = "Оберіть користувача для перегляду його архіву:"
     USER_HAS_NO_ARCHIVES = "У цього користувача немає збережених списків."

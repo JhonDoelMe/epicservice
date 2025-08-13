@@ -31,6 +31,13 @@ def get_admin_panel_kb():
                     callback_data="admin:user_archives",
                 )
             ],
+            # --- НОВАЯ КНОПКА ---
+            [
+                InlineKeyboardButton(
+                    text=LEXICON.BUTTON_DELETE_ALL_LISTS,
+                    callback_data="admin:delete_all_lists",
+                )
+            ],
         ]
     )
 
