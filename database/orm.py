@@ -60,16 +60,22 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> str:
         updated_count, added_count, deleted_count = 0, 0, 0
 
         with sync_session() as session:
+            # --- ВИПРАВЛЕННЯ ТУТ ---
+            # Отримуємо множину всіх артикулів, що є в базі
+            db_articles_query = select(Product.артикул)
+            db_articles = {p for p in session.execute(db_articles_query).scalars()}
+            
             # Видалення продуктів, яких немає у файлі
-            db_articles = {p.артикул for p in session.execute(select(Product.артикул)).scalars()}
             articles_to_delete = db_articles - file_articles
             if articles_to_delete:
                 stmt = delete(Product).where(Product.артикул.in_(articles_to_delete))
-                deleted_count = session.execute(stmt).rowcount
+                result = session.execute(stmt)
+                deleted_count = result.rowcount
 
             # Оновлення та додавання продуктів
+            existing_products_query = select(Product)
             existing_products = {
-                p.артикул: p for p in session.execute(select(Product)).scalars()
+                p.артикул: p for p in session.execute(existing_products_query).scalars()
             }
 
             for _, row in df.iterrows():
@@ -410,7 +416,9 @@ def orm_get_all_collected_items_sync() -> list[dict]:
         Список словників з агрегованими даними по кожному товару.
     """
     with sync_session() as session:
-        all_products = {p.артикул: p for p in orm_get_all_products_sync()}
+        all_products_query = select(Product)
+        all_products = {p.артикул: p for p in session.execute(all_products_query).scalars()}
+        
         all_saved_items_query = select(SavedListItem)
         all_saved_items = session.execute(all_saved_items_query).scalars().all()
 

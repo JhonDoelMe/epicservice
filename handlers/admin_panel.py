@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from config import ADMIN_IDS, ARCHIVES_PATH
 from database.orm import (orm_delete_all_saved_lists_sync,
+                         orm_get_all_collected_items_sync, # <-- Додано потрібний імпорт
                          orm_get_all_files_for_user,
                          orm_get_all_products_sync,
                          orm_get_all_temp_list_items_sync,
@@ -273,8 +274,9 @@ async def view_user_archive(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("download_zip:"))
 async def download_zip_handler(callback: CallbackQuery):
     """Обробляє запит на пакування та відправку ZIP-архіву файлів користувача."""
+    user_id_str = callback.data.split(":")[-1]
     try:
-        user_id = int(callback.data.split(":")[-1])
+        user_id = int(user_id_str)
         await callback.message.edit_text(LEXICON.PACKING_ARCHIVE.format(user_id=user_id))
         
         zip_path = await _pack_user_files_to_zip(user_id)
@@ -296,7 +298,7 @@ async def download_zip_handler(callback: CallbackQuery):
         logger.error("Невірний формат callback'а для завантаження ZIP: %s", callback.data)
         await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
     except Exception as e:
-        logger.error("Помилка відправки ZIP-архіву для %s: %s", user_id, e, exc_info=True)
+        logger.error("Помилка відправки ZIP-архіву для %s: %s", user_id_str, e, exc_info=True)
         await callback.answer(LEXICON.ZIP_ERROR.format(error=e), show_alert=True)
 
 @router.callback_query(F.data == "admin:export_stock")
@@ -324,6 +326,47 @@ async def export_stock_handler(callback: CallbackQuery):
             
     await callback.message.delete() # Видаляємо повідомлення "Починаю формування..."
     await callback.answer()
+
+# --- НОВИЙ ОБРОБНИК ---
+@router.callback_query(F.data == "admin:export_collected")
+async def export_collected_handler(callback: CallbackQuery):
+    """
+    Обробляє запит на експорт зведеного звіту по всім зібраним товарам.
+    """
+    await callback.message.edit_text(LEXICON.COLLECTED_REPORT_PROCESSING)
+    loop = asyncio.get_running_loop()
+
+    try:
+        # Виконуємо синхронну функцію збору даних в окремому потоці
+        collected_items = await loop.run_in_executor(None, orm_get_all_collected_items_sync)
+
+        if not collected_items:
+            await callback.message.edit_text(LEXICON.COLLECTED_REPORT_EMPTY)
+            await callback.answer()
+            return
+        
+        # Створюємо DataFrame та зберігаємо у файл
+        df = pd.DataFrame(collected_items)
+        report_path = os.path.join(ARCHIVES_PATH, f"collected_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+        os.makedirs(ARCHIVES_PATH, exist_ok=True)
+        df.to_excel(report_path, index=False)
+        
+        # Відправляємо файл
+        await callback.message.answer_document(
+            FSInputFile(report_path),
+            caption=LEXICON.COLLECTED_REPORT_CAPTION
+        )
+
+        # Прибираємо за собою
+        os.remove(report_path)
+        await callback.message.delete()
+        await callback.answer()
+
+    except Exception as e:
+        logger.error("Помилка створення зведеного звіту: %s", e, exc_info=True)
+        await callback.message.edit_text(LEXICON.UNEXPECTED_ERROR)
+        await callback.answer()
+# --- КІНЕЦЬ НОВОГО ОБРОБНИКА ---
 
 @router.callback_query(F.data == "admin:delete_all_lists")
 async def delete_all_lists_confirm_handler(callback: CallbackQuery, state: FSMContext):
