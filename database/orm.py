@@ -303,24 +303,22 @@ def orm_get_all_collected_items_sync():
         return list(collected_data.values())
 
 
-# --- НОВАЯ ФУНКЦИЯ УДАЛЕНИЯ ---
 def orm_delete_all_saved_lists_sync():
     """
     Удаляет все сохраненные списки из БД и связанные с ними файлы.
     Возвращает количество удаленных списков.
     """
     with sync_session() as session:
-        # 1. Получаем количество списков для отчета
         lists_count = session.execute(select(func.count(SavedList.id))).scalar_one()
         if lists_count == 0:
             return 0
         
-        # 2. Удаляем все записи из таблицы saved_lists
-        # Благодаря 'cascade="all, delete-orphan"' в models.py, связанные saved_list_items удалятся автоматически
+        # ИСПРАВЛЕНИЕ ЗДЕСЬ: Сначала удаляем дочерние записи
+        session.execute(delete(SavedListItem))
+        # Затем удаляем родительские
         session.execute(delete(SavedList))
         session.commit()
         
-        # 3. Полностью очищаем папку с архивами
         if os.path.exists(ARCHIVES_PATH):
             shutil.rmtree(ARCHIVES_PATH)
         
