@@ -1,29 +1,37 @@
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+from lexicon.lexicon import LEXICON
+
 # Клавіатура для звичайного користувача
 user_main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="Новий список"), KeyboardButton(text="Мій список")],
-        [KeyboardButton(text="🗂️ Архів списків")] # <-- ДОДАНО
+        [
+            KeyboardButton(text=LEXICON.BUTTON_NEW_LIST),
+            KeyboardButton(text=LEXICON.BUTTON_MY_LIST),
+        ],
+        [KeyboardButton(text=LEXICON.BUTTON_ARCHIVE)],
     ],
     resize_keyboard=True,
-    input_field_placeholder="Введіть артикул або назву товару..."
+    input_field_placeholder=LEXICON.PLACEHOLDER_USER,
 )
 
 # Клавіатура для адміністратора
 admin_main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="Новий список"), KeyboardButton(text="Мій список")],
-        [KeyboardButton(text="🗂️ Архів списків"), KeyboardButton(text="👑 Адмін-панель")]
+        [
+            KeyboardButton(text=LEXICON.BUTTON_NEW_LIST),
+            KeyboardButton(text=LEXICON.BUTTON_MY_LIST),
+        ],
+        [
+            KeyboardButton(text=LEXICON.BUTTON_ARCHIVE),
+            KeyboardButton(text=LEXICON.BUTTON_ADMIN_PANEL),
+        ],
     ],
     resize_keyboard=True,
-    input_field_placeholder="Введіть артикул, назву або команду..."
+    input_field_placeholder=LEXICON.PLACEHOLDER_ADMIN,
 )
 
 # Клавіатура для скасування дії (для FSM станів)
 cancel_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="❌ Скасувати")]
-    ],
-    resize_keyboard=True
+    keyboard=[[KeyboardButton(text=LEXICON.BUTTON_CANCEL)]], resize_keyboard=True
 )
