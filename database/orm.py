@@ -205,11 +205,29 @@ async def orm_clear_temp_list(user_id: int):
         await session.execute(query)
         await session.commit()
 
-
+# --- ИЗМЕНЕННАЯ ФУНКЦИЯ ---
 async def orm_add_item_to_temp_list(user_id: int, product_id: int, quantity: int):
+    """
+    Добавляет товар во временный список. Если товар уже есть, обновляет его количество.
+    """
     async with async_session() as session:
-        new_item = TempList(user_id=user_id, product_id=product_id, quantity=quantity)
-        session.add(new_item)
+        # Проверяем, есть ли уже такой товар в списке
+        query = select(TempList).where(
+            TempList.user_id == user_id, TempList.product_id == product_id
+        )
+        result = await session.execute(query)
+        existing_item = result.scalar_one_or_none()
+
+        if existing_item:
+            # Если есть - обновляем количество
+            existing_item.quantity += quantity
+        else:
+            # Если нет - создаем новую запись
+            new_item = TempList(
+                user_id=user_id, product_id=product_id, quantity=quantity
+            )
+            session.add(new_item)
+        
         await session.commit()
 
 
@@ -234,9 +252,6 @@ async def orm_get_temp_list_department(user_id: int):
 
 
 async def orm_get_temp_list_item_quantity(user_id: int, product_id: int) -> int:
-    """
-    Возвращает количество конкретного товара во временном списке пользователя.
-    """
     async with async_session() as session:
         query = (
             select(func.sum(TempList.quantity))

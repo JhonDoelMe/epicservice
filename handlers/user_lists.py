@@ -11,39 +11,35 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
-from config import ADMIN_IDS, ARCHIVES_PATH
-from database.orm import (orm_clear_all_reservations, orm_get_all_files_for_user,
-                          orm_get_all_products_sync,
-                          orm_get_all_temp_list_items_sync,
-                          orm_get_user_lists_archive,
-                          orm_get_users_with_archives, orm_smart_import,
-                          orm_get_product_by_id, orm_get_temp_list_department,
-                          orm_add_item_to_temp_list, orm_update_reserved_quantity,
-                          orm_add_saved_list, orm_clear_temp_list, orm_get_temp_list)
+from config import ADMIN_IDS
 from database.engine import async_session
-from keyboards.inline import (get_admin_panel_kb, get_archive_kb,
-                              get_users_with_archives_kb, get_confirmation_kb)
+from database.orm import (orm_add_item_to_temp_list, orm_add_saved_list,
+                          orm_clear_temp_list, orm_get_product_by_id,
+                          orm_get_temp_list, orm_get_temp_list_department,
+                          orm_update_reserved_quantity)
+from keyboards.inline import get_confirmation_kb
 from keyboards.reply import admin_main_kb, cancel_kb, user_main_kb
 from lexicon.lexicon import LEXICON
 
 router = Router()
 
+
 class ListStates(StatesGroup):
     waiting_for_quantity = State()
     confirm_new_list = State()
 
+
 @router.message(F.text == "Новий список")
 async def new_list_handler(message: Message, state: FSMContext):
-    """Запитує підтвердження на створення нового списку."""
     await message.answer(
         LEXICON.NEW_LIST_CONFIRM,
         reply_markup=get_confirmation_kb("confirm_new_list", "cancel_new_list"),
     )
     await state.set_state(ListStates.confirm_new_list)
 
+
 @router.callback_query(ListStates.confirm_new_list, F.data == "confirm_new_list")
 async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
-    """Обробляє підтвердження та створює новий список."""
     user_id = callback.from_user.id
     await orm_clear_temp_list(user_id)
     logging.info(f"User {user_id} created a new list (cleared temp list).")
@@ -51,19 +47,23 @@ async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
+
 @router.callback_query(ListStates.confirm_new_list, F.data == "cancel_new_list")
 async def new_list_canceled(callback: CallbackQuery, state: FSMContext):
-    """Обробляє скасування створення нового списку."""
     await callback.message.edit_text(LEXICON.ACTION_CANCELED)
     await state.clear()
     await callback.answer()
 
+
 @router.message(F.text == "Мій список")
 async def my_list_handler(message: Message):
     user_id = message.from_user.id
+    
+    reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
+
     temp_list = await orm_get_temp_list(user_id)
     if not temp_list:
-        await message.answer(LEXICON.EMPTY_LIST)
+        await message.answer(LEXICON.EMPTY_LIST, reply_markup=reply_kb)
         return
 
     department_id = temp_list[0].product.відділ
@@ -91,6 +91,9 @@ async def my_list_handler(message: Message):
         ]
     )
     await message.answer("\n".join(response_lines), reply_markup=save_button)
+    # Отправляем еще одно сообщение, чтобы обновить reply-клавиатуру, если она "спряталась"
+    await message.answer("Меню:", reply_markup=reply_kb)
+
 
 @router.callback_query(F.data.startswith("add_all:"))
 async def add_all_callback(callback: CallbackQuery):
@@ -128,6 +131,7 @@ async def add_all_callback(callback: CallbackQuery):
         )
     await callback.answer()
 
+
 @router.callback_query(F.data.startswith("add_custom:"))
 async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -155,10 +159,14 @@ async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
         await state.set_state(ListStates.waiting_for_quantity)
     await callback.answer()
 
+
 @router.message(ListStates.waiting_for_quantity, F.text == "❌ Скасувати")
 async def cancel_quantity_input(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
     await state.clear()
-    await message.answer(LEXICON.CANCEL_ACTION, reply_markup=user_main_kb)
+    await message.answer(LEXICON.CANCEL_ACTION, reply_markup=reply_kb)
+
 
 @router.message(ListStates.waiting_for_quantity, F.text.isdigit())
 async def process_quantity(message: Message, state: FSMContext):
@@ -166,6 +174,7 @@ async def process_quantity(message: Message, state: FSMContext):
     user_id = message.from_user.id
     data = await state.get_data()
     product_id = data.get("product_id")
+    reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
     await orm_add_item_to_temp_list(
         user_id=user_id, product_id=product_id, quantity=quantity
     )
@@ -176,9 +185,10 @@ async def process_quantity(message: Message, state: FSMContext):
         LEXICON.ITEM_ADDED_TO_LIST.format(
             article=data.get("article"), quantity=quantity
         ),
-        reply_markup=user_main_kb,
+        reply_markup=reply_kb,
     )
     await state.clear()
+
 
 @router.callback_query(F.data == "save_list")
 async def save_list_callback(callback: CallbackQuery):
