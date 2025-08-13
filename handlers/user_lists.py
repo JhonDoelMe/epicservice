@@ -89,8 +89,8 @@ async def my_list_handler(message: Message):
         ]
     )
     await message.answer("\n".join(response_lines), reply_markup=save_button)
-    # Отправляем невидимое сообщение, чтобы обновить клавиатуру
-    await message.answer(" ", reply_markup=reply_kb)
+    # ИСПРАВЛЕНИЕ ЗДЕСЬ: используется невидимый символ
+    await message.answer("⠀", reply_markup=reply_kb)
 
 
 @router.callback_query(F.data.startswith("add_all:"))
