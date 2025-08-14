@@ -22,28 +22,26 @@ def _extract_article(name_str: str) -> str | None:
     """
     Витягує артикул з початку рядка назви товару.
     Артикул повинен складатися з 8 або більше цифр.
-
-    Args:
-        name_str: Рядок з повною назвою товару.
-
-    Returns:
-        Витягнутий артикул у вигляді рядка або None, якщо артикул не знайдено.
     """
-    match = re.match(r"^(\d{8,})", name_str)
+    if not isinstance(name_str, str):
+        name_str = str(name_str)
+    match = re.match(r"^(\d{8,})", name_str.strip())
     return match.group(1) if match else None
+
+def _normalize_quantity(value: any) -> str:
+    """
+    Приводить значення кількості до чистого рядкового типу.
+    """
+    if value is None:
+        return "0"
+    s_value = str(value).replace(',', '.').strip()
+    s_value = re.sub(r'[^\d.]', '', s_value)
+    return s_value if s_value else "0"
 
 
 def _sync_smart_import(dataframe: pd.DataFrame) -> str:
     """
     Синхронно виконує "розумний" імпорт товарів з DataFrame у базу даних.
-    Оновлює існуючі товари, додає нові та видаляє ті, яких немає у файлі.
-    Також обнуляє всі попередні резерви.
-
-    Args:
-        dataframe: DataFrame pandas з даними для імпорту.
-
-    Returns:
-        Рядок зі звітом про результати імпорту.
     """
     try:
         df = dataframe.rename(
@@ -54,25 +52,21 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> str:
         file_articles = {
             article
             for _, row in df.iterrows()
-            if pd.notna(row["назва"]) and (article := _extract_article(str(row["назва"])))
+            if pd.notna(row["назва"]) and (article := _extract_article(row["назва"]))
         }
         articles_in_file_count = len(file_articles)
         updated_count, added_count, deleted_count = 0, 0, 0
 
         with sync_session() as session:
-            # --- ВИПРАВЛЕННЯ ТУТ ---
-            # Отримуємо множину всіх артикулів, що є в базі
             db_articles_query = select(Product.артикул)
             db_articles = {p for p in session.execute(db_articles_query).scalars()}
             
-            # Видалення продуктів, яких немає у файлі
             articles_to_delete = db_articles - file_articles
             if articles_to_delete:
                 stmt = delete(Product).where(Product.артикул.in_(articles_to_delete))
                 result = session.execute(stmt)
                 deleted_count = result.rowcount
 
-            # Оновлення та додавання продуктів
             existing_products_query = select(Product)
             existing_products = {
                 p.артикул: p for p in session.execute(existing_products_query).scalars()
@@ -81,37 +75,35 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> str:
             for _, row in df.iterrows():
                 if pd.isna(row["назва"]) or pd.isna(row["відділ"]):
                     continue
-                full_name = str(row["назва"])
+                
+                full_name = str(row["назва"]).strip()
+                quantity_normalized = _normalize_quantity(row["кількість"])
+                
                 article = _extract_article(full_name)
                 if not article:
                     continue
 
+                product_data = {
+                    "назва": full_name,
+                    "відділ": int(row["відділ"]),
+                    "група": str(row["група"]).strip(),
+                    "кількість": quantity_normalized,
+                }
+
                 if article in existing_products:
-                    product = existing_products[article]
-                    product.назва = full_name
-                    product.відділ = int(row["відділ"])
-                    product.група = str(row["група"])
-                    product.кількість = str(row["кількість"])
+                    stmt = update(Product).where(Product.артикул == article).values(**product_data)
+                    session.execute(stmt)
                     updated_count += 1
                 else:
-                    new_product = Product(
-                        артикул=article,
-                        назва=full_name,
-                        відділ=int(row["відділ"]),
-                        група=str(row["група"]),
-                        кількість=str(row["кількість"]),
-                    )
+                    new_product = Product(артикул=article, **product_data)
                     session.add(new_product)
                     added_count += 1
             
-            # Обнулення всіх резервів
             session.execute(update(Product).values(відкладено=0))
-            
             session.commit()
 
             total_in_db = session.execute(select(func.count(Product.id))).scalar_one()
 
-            # Формування звіту
             report_lines = [
                 LEXICON.IMPORT_REPORT_TITLE,
                 LEXICON.IMPORT_REPORT_ADDED.format(added=added_count),
@@ -127,33 +119,78 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> str:
             return "\n".join(report_lines)
 
     except Exception as e:
-        logging.error(f"Помилка під час синхронного імпорту: {e}", exc_info=True)
+        logger.error(f"Помилка під час синхронного імпорту: {e}", exc_info=True)
         return LEXICON.IMPORT_SYNC_ERROR.format(error=str(e))
 
 
 async def orm_smart_import(dataframe: pd.DataFrame) -> str:
     """
-    Асинхронна обгортка для запуску синхронної функції імпорту в окремому потоці.
-
-    Args:
-        dataframe: DataFrame pandas з даними для імпорту.
-
-    Returns:
-        Рядок зі звітом про результати імпорту.
+    Асинхронна обгортка для запуску синхронної функції імпорту.
     """
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _sync_smart_import, dataframe)
 
 
+def _sync_subtract_collected_from_stock(dataframe: pd.DataFrame) -> str:
+    """
+    Синхронно віднімає кількість зібраних товарів (з звіту) від залишків у базі.
+    """
+    processed_count = 0
+    not_found_count = 0
+    error_count = 0
+    
+    with sync_session() as session:
+        for _, row in dataframe.iterrows():
+            article = _extract_article(str(row.get("Назва", "")))
+            if not article:
+                continue
+
+            product_stmt = select(Product).where(Product.артикул == article)
+            product = session.execute(product_stmt).scalar_one_or_none()
+
+            if not product:
+                not_found_count += 1
+                logger.warning(f"Віднімання: товар з артикулом {article} не знайдено в БД.")
+                continue
+
+            try:
+                current_stock = float(str(product.кількість).replace(',', '.'))
+                quantity_to_subtract = float(str(row["Кількість"]).replace(',', '.'))
+                
+                new_stock = current_stock - quantity_to_subtract
+                
+                update_stmt = update(Product).where(Product.id == product.id).values(кількість=str(new_stock))
+                session.execute(update_stmt)
+                
+                processed_count += 1
+
+            except (ValueError, TypeError) as e:
+                error_count += 1
+                logger.error(f"Помилка конвертації числа для артикула {article}: {e}")
+                continue
+        
+        session.commit()
+
+    report_lines = [
+        LEXICON.SUBTRACT_REPORT_TITLE,
+        LEXICON.SUBTRACT_REPORT_PROCESSED.format(processed=processed_count),
+        LEXICON.SUBTRACT_REPORT_NOT_FOUND.format(not_found=not_found_count),
+        LEXICON.SUBTRACT_REPORT_ERROR.format(errors=error_count),
+    ]
+    return "\n".join(report_lines)
+
+
+async def orm_subtract_collected(dataframe: pd.DataFrame) -> str:
+    """
+    Асинхронна обгортка для запуску синхронної функції віднімання залишків.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _sync_subtract_collected_from_stock, dataframe)
+
+
 async def orm_find_products(search_query: str) -> list[Product]:
     """
-    Виконує нечіткий пошук товарів у базі даних за назвою або артикулом.
-
-    Args:
-        search_query: Рядок для пошуку.
-
-    Returns:
-        Список знайдених об'єктів Product, відсортований за релевантністю.
+    Виконує нечіткий пошук товарів у базі даних.
     """
     async with async_session() as session:
         like_query = f"%{search_query}%"
@@ -172,24 +209,16 @@ async def orm_find_products(search_query: str) -> list[Product]:
             name_score = fuzz.token_set_ratio(search_query.lower(), product.назва.lower())
             final_score = max(article_score, name_score)
 
-            if final_score > 55:  # Поріг релевантності
+            if final_score > 55:
                 scored_products.append((product, final_score))
 
         scored_products.sort(key=lambda x: x[1], reverse=True)
-        return [product for product, score in scored_products[:15]] # Обмеження кількості результатів
+        return [product for product, score in scored_products[:15]]
 
 
 async def orm_get_product_by_id(session, product_id: int, for_update: bool = False) -> Product | None:
     """
     Отримує один товар за його унікальним ідентифікатором (ID).
-
-    Args:
-        session: Асинхронна сесія SQLAlchemy.
-        product_id: ID товару.
-        for_update: Чи потрібно блокувати рядок для оновлення (песимістичне блокування).
-
-    Returns:
-        Об'єкт Product або None, якщо товар не знайдено.
     """
     query = select(Product).where(Product.id == product_id)
     if for_update:
@@ -201,10 +230,6 @@ async def orm_get_product_by_id(session, product_id: int, for_update: bool = Fal
 async def orm_update_reserved_quantity(session, items: list[dict]):
     """
     Оновлює кількість зарезервованих товарів.
-
-    Args:
-        session: Асинхронна сесія SQLAlchemy.
-        items: Список словників, кожен з яких містить 'product_id' та 'quantity'.
     """
     for item in items:
         product = await orm_get_product_by_id(
@@ -217,17 +242,10 @@ async def orm_update_reserved_quantity(session, items: list[dict]):
 async def orm_add_saved_list(user_id: int, file_name: str, file_path: str, items: list[dict], session):
     """
     Додає інформацію про новий збережений список до бази даних.
-
-    Args:
-        user_id: Telegram ID користувача.
-        file_name: Назва згенерованого Excel-файлу.
-        file_path: Шлях до згенерованого Excel-файлу.
-        items: Список товарів для збереження.
-        session: Асинхронна сесія SQLAlchemy.
     """
     new_list = SavedList(user_id=user_id, file_name=file_name, file_path=file_path)
     session.add(new_list)
-    await session.flush()  # Отримуємо ID для new_list
+    await session.flush()
     for item in items:
         list_item = SavedListItem(
             list_id=new_list.id,
@@ -240,12 +258,6 @@ async def orm_add_saved_list(user_id: int, file_name: str, file_path: str, items
 async def orm_get_user_lists_archive(user_id: int) -> list[SavedList]:
     """
     Отримує архів збережених списків для конкретного користувача.
-
-    Args:
-        user_id: Telegram ID користувача.
-
-    Returns:
-        Список об'єктів SavedList.
     """
     async with async_session() as session:
         query = (
@@ -260,12 +272,6 @@ async def orm_get_user_lists_archive(user_id: int) -> list[SavedList]:
 async def orm_get_all_files_for_user(user_id: int) -> list[str]:
     """
     Отримує шляхи до всіх збережених файлів-списків для користувача.
-
-    Args:
-        user_id: Telegram ID користувача.
-
-    Returns:
-        Список шляхів до файлів.
     """
     async with async_session() as session:
         query = select(SavedList.file_path).where(SavedList.user_id == user_id)
@@ -275,11 +281,7 @@ async def orm_get_all_files_for_user(user_id: int) -> list[str]:
 
 async def orm_get_users_with_archives() -> list[tuple[int, int]]:
     """
-    Отримує список користувачів, які мають хоча б один збережений список,
-    та кількість їхніх списків.
-
-    Returns:
-        Список кортежів (user_id, lists_count).
+    Отримує список користувачів, які мають хоча б один збережений список.
     """
     async with async_session() as session:
         query = (
@@ -294,9 +296,6 @@ async def orm_get_users_with_archives() -> list[tuple[int, int]]:
 async def orm_clear_temp_list(user_id: int):
     """
     Повністю очищує тимчасовий список для користувача.
-
-    Args:
-        user_id: Telegram ID користувача.
     """
     async with async_session() as session:
         query = delete(TempList).where(TempList.user_id == user_id)
@@ -307,12 +306,6 @@ async def orm_clear_temp_list(user_id: int):
 async def orm_add_item_to_temp_list(user_id: int, product_id: int, quantity: int):
     """
     Додає товар до тимчасового списку користувача.
-    Якщо товар вже є у списку, оновлює його кількість.
-
-    Args:
-        user_id: Telegram ID користувача.
-        product_id: ID товару.
-        quantity: Кількість товару.
     """
     async with async_session() as session:
         query = select(TempList).where(
@@ -334,13 +327,7 @@ async def orm_add_item_to_temp_list(user_id: int, product_id: int, quantity: int
 
 async def orm_get_temp_list(user_id: int) -> list[TempList]:
     """
-    Отримує поточний тимчасовий список користувача з повною інформацією про товари.
-
-    Args:
-        user_id: Telegram ID користувача.
-
-    Returns:
-        Список об'єктів TempList.
+    Отримує поточний тимчасовий список користувача.
     """
     async with async_session() as session:
         query = select(TempList).where(TempList.user_id == user_id).options(selectinload(TempList.product))
@@ -350,13 +337,7 @@ async def orm_get_temp_list(user_id: int) -> list[TempList]:
 
 async def orm_get_temp_list_department(user_id: int) -> int | None:
     """
-    Визначає відділ поточного тимчасового списку користувача (за першим товаром).
-
-    Args:
-        user_id: Telegram ID користувача.
-
-    Returns:
-        Номер відділу або None, якщо список порожній.
+    Визначає відділ поточного тимчасового списку користувача.
     """
     async with async_session() as session:
         query = (
@@ -373,13 +354,6 @@ async def orm_get_temp_list_department(user_id: int) -> int | None:
 async def orm_get_temp_list_item_quantity(user_id: int, product_id: int) -> int:
     """
     Отримує кількість конкретного товару в тимчасовому списку користувача.
-
-    Args:
-        user_id: Telegram ID користувача.
-        product_id: ID товару.
-
-    Returns:
-        Кількість товару (0, якщо товару немає у списку).
     """
     async with async_session() as session:
         query = (
@@ -411,9 +385,6 @@ def orm_get_all_temp_list_items_sync() -> list[TempList]:
 def orm_get_all_collected_items_sync() -> list[dict]:
     """
     Синхронно збирає зведені дані про всі товари у всіх збережених списках.
-
-    Returns:
-        Список словників з агрегованими даними по кожному товару.
     """
     with sync_session() as session:
         all_products_query = select(Product)
@@ -446,9 +417,6 @@ def orm_get_all_collected_items_sync() -> list[dict]:
 def orm_delete_all_saved_lists_sync() -> int:
     """
     Синхронно видаляє абсолютно всі збережені списки, їхні позиції та файли.
-
-    Returns:
-        Кількість видалених списків.
     """
     with sync_session() as session:
         lists_count_query = select(func.count(SavedList.id))
@@ -468,15 +436,7 @@ def orm_delete_all_saved_lists_sync() -> int:
 
 def orm_get_users_for_warning_sync(hours_warn: int, hours_expire: int) -> set[int]:
     """
-    Синхронно знаходить користувачів, яким потрібно надіслати попередження
-    про майбутнє видалення їхніх старих списків.
-
-    Args:
-        hours_warn: Мінімальний вік списку для попередження (у годинах).
-        hours_expire: Максимальний вік списку для попередження (у годинах).
-
-    Returns:
-        Множина унікальних ID користувачів.
+    Синхронно знаходить користувачів для попередження про видалення списків.
     """
     with sync_session() as session:
         warn_time = datetime.now() - timedelta(hours=hours_warn)
@@ -493,13 +453,7 @@ def orm_get_users_for_warning_sync(hours_warn: int, hours_expire: int) -> set[in
 
 def orm_delete_lists_older_than_sync(hours: int) -> int:
     """
-    Синхронно видаляє списки (разом із файлами), які старші за вказану кількість годин.
-
-    Args:
-        hours: Максимально дозволений вік списку в годинах.
-
-    Returns:
-        Кількість видалених списків.
+    Синхронно видаляє списки, які старші за вказану кількість годин.
     """
     with sync_session() as session:
         expire_time = datetime.now() - timedelta(hours=hours)
@@ -513,18 +467,16 @@ def orm_delete_lists_older_than_sync(hours: int) -> int:
         count = len(lists_to_delete)
         list_ids_to_delete = [lst.id for lst in lists_to_delete]
         
-        # Видалення файлів
         for lst in lists_to_delete:
             if os.path.exists(lst.file_path):
                 try:
                     user_dir = os.path.dirname(lst.file_path)
                     os.remove(lst.file_path)
-                    if not os.listdir(user_dir): # Видаляємо папку користувача, якщо вона порожня
+                    if not os.listdir(user_dir):
                         os.rmdir(user_dir)
                 except OSError as e:
                     logging.error(f"Помилка видалення архівного файлу або папки {lst.file_path}: {e}")
 
-        # Видалення з БД
         session.execute(delete(SavedListItem).where(SavedListItem.list_id.in_(list_ids_to_delete)))
         session.execute(delete(SavedList).where(SavedList.id.in_(list_ids_to_delete)))
         

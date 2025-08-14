@@ -20,13 +20,13 @@ from database.orm import (orm_add_item_to_temp_list, orm_add_saved_list,
 from keyboards.inline import get_confirmation_kb
 from keyboards.reply import admin_main_kb, cancel_kb, user_main_kb
 from lexicon.lexicon import LEXICON
+from utils.markdown_corrector import escape_markdown
 
 logger = logging.getLogger(__name__)
 
 router = Router()
 
 class ListStates(StatesGroup):
-    """Стани для FSM, пов'язані з роботою зі списками."""
     waiting_for_quantity = State()
     confirm_new_list = State()
 
@@ -35,17 +35,6 @@ async def _save_list_to_excel(
     user_id: int,
     prefix: str = ""
 ) -> Optional[str]:
-    """
-    Зберігає список товарів у файл Excel.
-
-    Args:
-        items: Список словників з даними товарів ('артикул', 'кількість').
-        user_id: ID користувача для створення унікальної папки.
-        prefix: Префікс для назви файлу (напр., 'лишки_').
-
-    Returns:
-        Шлях до створеного файлу або None у разі помилки.
-    """
     if not items:
         return None
     try:
@@ -68,7 +57,6 @@ async def _save_list_to_excel(
 
 @router.message(F.text == LEXICON.BUTTON_NEW_LIST)
 async def new_list_handler(message: Message, state: FSMContext):
-    """Запитує підтвердження на створення нового списку, що видалить поточний."""
     await message.answer(
         LEXICON.NEW_LIST_CONFIRM,
         reply_markup=get_confirmation_kb("confirm_new_list", "cancel_new_list"),
@@ -77,29 +65,28 @@ async def new_list_handler(message: Message, state: FSMContext):
 
 @router.callback_query(ListStates.confirm_new_list, F.data == "confirm_new_list")
 async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
-    """Обробляє підтвердження створення нового списку: очищує старий тимчасовий список."""
     user_id = callback.from_user.id
     await state.clear()
     try:
         await orm_clear_temp_list(user_id)
-        logger.info("Користувач %s створив новий список (очищено тимчасовий список).", user_id)
         await callback.message.edit_text(LEXICON.NEW_LIST_CONFIRMED)
     except SQLAlchemyError as e:
-        logger.error("Помилка очищення списку для користувача %s: %s", user_id, e)
         await callback.message.edit_text(LEXICON.UNEXPECTED_ERROR)
     finally:
         await callback.answer()
 
 @router.callback_query(ListStates.confirm_new_list, F.data == "cancel_new_list")
 async def new_list_canceled(callback: CallbackQuery, state: FSMContext):
-    """Обробляє скасування створення нового списку."""
     await state.clear()
     await callback.message.edit_text(LEXICON.ACTION_CANCELED)
     await callback.answer()
 
 @router.message(F.text == LEXICON.BUTTON_MY_LIST)
 async def my_list_handler(message: Message):
-    """Відображає поточний (тимчасовий) список товарів користувача."""
+    """
+    Відображає поточний список товарів у форматі "артикул - кількість"
+    та має захист від занадто довгих повідомлень.
+    """
     user_id = message.from_user.id
     reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
 
@@ -110,26 +97,43 @@ async def my_list_handler(message: Message):
             return
 
         department_id = temp_list[0].product.відділ
-        response_lines = [LEXICON.MY_LIST_TITLE.format(department=department_id)]
+        
+        # --- ФОРМАТУВАННЯ ТА ЗАХИСТ ВІД ДОВГИХ ПОВІДОМЛЕНЬ ---
+        header = [f"*Ваш поточний список (Відділ: {department_id}):*"]
+        
+        # Формуємо список у форматі "артикул - кількість"
+        list_items = [
+            f"`{item.product.артикул}` - *{item.quantity}* шт." 
+            for item in temp_list
+        ]
 
-        for i, item in enumerate(temp_list, 1):
-            article = item.product.артикул
-            # Видаляємо артикул з початку назви для кращого відображення
-            name_without_article = item.product.назва.replace(f"{article} - ", "", 1)
-            response_lines.append(
-                LEXICON.MY_LIST_ITEM.format(
-                    i=i,
-                    article=article,
-                    name=name_without_article,
-                    quantity=item.quantity,
-                )
-            )
+        # Розділяємо повідомлення на частини, якщо потрібно
+        max_length = 4096
+        parts = []
+        current_part = "\n".join(header)
 
-        save_button = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=LEXICON.SAVE_LIST_BUTTON, callback_data="save_list")]
-        ])
-        await message.answer("\n".join(response_lines), reply_markup=save_button)
+        for line in list_items:
+            if len(current_part) + len(line) + 1 > max_length:
+                parts.append(current_part)
+                current_part = line
+            else:
+                current_part += "\n" + line
+        
+        parts.append(current_part)
+
+        # Відправляємо всі частини
+        for i, part in enumerate(parts):
+            # Кнопку збереження додаємо тільки до останньої частини
+            if i == len(parts) - 1:
+                save_button = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=LEXICON.SAVE_LIST_BUTTON, callback_data="save_list")]
+                ])
+                await message.answer(part, reply_markup=save_button)
+            else:
+                await message.answer(part)
+        
         await message.answer(LEXICON.FORGET_NOT_TO_SAVE, reply_markup=reply_kb)
+
     except Exception as e:
         logger.error("Помилка отримання списку для користувача %s: %s", user_id, e, exc_info=True)
         await message.answer(LEXICON.UNEXPECTED_ERROR, reply_markup=reply_kb)
@@ -150,7 +154,6 @@ async def add_all_callback(callback: CallbackQuery, state: FSMContext):
                 await callback.answer(LEXICON.PRODUCT_NOT_FOUND, show_alert=True)
                 return
 
-            # Перевірка на відповідність відділу
             allowed_department = await orm_get_temp_list_department(user_id)
             if allowed_department is not None and product.відділ != allowed_department:
                 await callback.answer(
@@ -162,10 +165,9 @@ async def add_all_callback(callback: CallbackQuery, state: FSMContext):
             await orm_add_item_to_temp_list(user_id, product_id, quantity)
             logger.info("Користувач %s додав товар ID %s (кількість: %s) до списку.", user_id, product_id, quantity)
 
-            await callback.message.edit_text(
-                callback.message.text + f"\n\n✅ *Додано {quantity} шт.*",
-            )
-            await callback.answer(f"Додано {product.артикул}")
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer(f"✅ *Додано {quantity} шт.*")
+            await callback.answer()
 
     except (ValueError, IndexError) as e:
         logger.error("Помилка парсингу даних у add_all_callback: %s", callback.data, exc_info=True)
@@ -177,7 +179,6 @@ async def add_all_callback(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("add_custom:"))
 async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
-    """Ініціює процес додавання товару з кастомною кількістю."""
     user_id = callback.from_user.id
     try:
         product_id = int(callback.data.split(":", 1)[1])
@@ -188,7 +189,6 @@ async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
                 await callback.answer(LEXICON.PRODUCT_NOT_FOUND, show_alert=True)
                 return
 
-            # Перевірка на відповідність відділу
             allowed_department = await orm_get_temp_list_department(user_id)
             if allowed_department is not None and product.відділ != allowed_department:
                 await callback.answer(
@@ -200,14 +200,13 @@ async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
             await state.update_data(product_id=product.id, article=product.артикул, product_name=product.назва)
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.message.answer(
-                LEXICON.ENTER_QUANTITY.format(product_name=product.назва),
+                LEXICON.ENTER_QUANTITY.format(product_name=escape_markdown(product.назва)),
                 reply_markup=cancel_kb,
             )
             await state.set_state(ListStates.waiting_for_quantity)
             await callback.answer()
 
-    except (ValueError, IndexError) as e:
-        logger.error("Помилка парсингу даних у add_custom_callback: %s", callback.data, exc_info=True)
+    except (ValueError, IndexError):
         await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
     except Exception as e:
         logger.error("Неочікувана помилка ініціації додавання товару %s: %s", user_id, e, exc_info=True)
@@ -216,14 +215,12 @@ async def add_custom_callback(callback: CallbackQuery, state: FSMContext):
 
 @router.message(ListStates.waiting_for_quantity, F.text == "❌ Скасувати")
 async def cancel_quantity_input(message: Message, state: FSMContext):
-    """Обробляє скасування введення кількості товару."""
     await state.clear()
     reply_kb = admin_main_kb if message.from_user.id in ADMIN_IDS else user_main_kb
     await message.answer(LEXICON.CANCEL_ACTION, reply_markup=reply_kb)
 
 @router.message(ListStates.waiting_for_quantity, F.text.isdigit())
 async def process_quantity(message: Message, state: FSMContext):
-    """Обробляє введену користувачем кількість товару."""
     user_id = message.from_user.id
     reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
     
@@ -237,7 +234,6 @@ async def process_quantity(message: Message, state: FSMContext):
         product_id = data.get("product_id")
         
         await orm_add_item_to_temp_list(user_id, product_id, quantity)
-        logger.info("Користувач %s додав товар ID %s (кількість: %s) через введення.", user_id, product_id, quantity)
 
         await message.answer(
             LEXICON.ITEM_ADDED_TO_LIST.format(
@@ -248,47 +244,36 @@ async def process_quantity(message: Message, state: FSMContext):
     except ValueError:
         await message.answer("Будь ласка, введіть коректне число.", reply_markup=cancel_kb)
     except Exception as e:
-        logger.error("Помилка обробки кількості для користувача %s: %s", user_id, e)
         await message.answer(LEXICON.UNEXPECTED_ERROR, reply_markup=reply_kb)
     finally:
         await state.clear()
 
 @router.callback_query(F.data == "save_list")
 async def save_list_callback(callback: CallbackQuery):
-    """
-    Ключова функція. Зберігає поточний список: перевіряє залишки, резервує товари,
-    створює Excel-файли для наявних товарів та для лишків, зберігає запис в БД.
-    Всі операції з БД відбуваються в одній атомарній транзакції.
-    """
     user_id = callback.from_user.id
-    logger.info("Користувач %s ініціював збереження списку.", user_id)
     
     await callback.message.edit_text(LEXICON.SAVING_LIST_PROCESS)
 
     try:
         async with async_session() as session:
-            temp_list = await orm_get_temp_list(user_id)
-            if not temp_list:
-                await callback.message.edit_text(LEXICON.EMPTY_LIST)
-                await callback.answer(show_alert=True)
-                return
-
-            in_stock_items, surplus_items, reservation_updates = [], [], []
-
-            # Початок атомарної транзакції
             async with session.begin():
+                temp_list = await orm_get_temp_list(user_id)
+                if not temp_list:
+                    await callback.message.edit_text(LEXICON.EMPTY_LIST)
+                    return
+
+                in_stock_items, surplus_items, reservation_updates = [], [], []
+
                 for item in temp_list:
-                    # Блокуємо рядок товару для безпечного оновлення
                     product = await orm_get_product_by_id(session, item.product_id, for_update=True)
                     if not product:
-                        continue # Пропускаємо, якщо товар раптом видалили
+                        continue
 
                     try:
-                        stock_qty = float(product.кількість)
+                        stock_qty = float(str(product.кількість).replace(',', '.'))
                     except (ValueError, TypeError):
                         stock_qty = 0
                     
-                    # Розраховуємо доступну кількість
                     available = stock_qty - (product.відкладено or 0)
                     
                     item_for_excel = {"артикул": product.артикул, "кількість": 0}
@@ -311,25 +296,17 @@ async def save_list_callback(callback: CallbackQuery):
                 if not in_stock_items and not surplus_items:
                     raise ValueError("Не вдалося обробити жодного товару зі списку.")
 
-                # Крок 1: Оновлюємо резерви в БД
                 if reservation_updates:
                     await orm_update_reserved_quantity(session, reservation_updates)
 
-                # Крок 2: Зберігаємо основний список в Excel
                 file_path = await _save_list_to_excel(in_stock_items, user_id)
 
-                # Крок 3: Створюємо запис про збережений список в БД
                 if file_path and in_stock_items:
-                    # Готуємо дані про товари для запису в БД
                     db_items = [{"article_name": f"{p.product.назва}", "quantity": p.quantity} for p in temp_list]
                     await orm_add_saved_list(user_id, os.path.basename(file_path), file_path, db_items, session)
 
-                # Крок 4: Очищуємо тимчасовий список
                 await orm_clear_temp_list(user_id)
 
-            # Кінець атомарної транзакції. commit() викликається автоматично.
-
-            # Відправляємо файли користувачу
             if file_path and in_stock_items:
                 await callback.message.answer_document(FSInputFile(file_path), caption=LEXICON.MAIN_LIST_SAVED)
 
@@ -337,14 +314,13 @@ async def save_list_callback(callback: CallbackQuery):
                 surplus_path = await _save_list_to_excel(surplus_items, user_id, "лишки_")
                 if surplus_path:
                     await callback.message.answer_document(FSInputFile(surplus_path), caption=LEXICON.SURPLUS_LIST_CAPTION)
-                    os.remove(surplus_path) # Файл з лишками є тимчасовим
+                    os.remove(surplus_path)
 
-            await callback.message.delete() # Видаляємо повідомлення "Перевіряю залишки..."
+            await callback.message.delete()
             await callback.answer(LEXICON.PROCESSING_COMPLETE, show_alert=True)
 
     except (SQLAlchemyError, ValueError) as e:
-        logger.critical("Критична помилка збереження списку для %s: %s", user_id, e, exc_info=True)
         await callback.message.answer(LEXICON.TRANSACTION_ERROR)
     except Exception as e:
         logger.error("Неочікувана помилка при збереженні списку для %s: %s", user_id, e, exc_info=True)
-        await callback.message.answer(LEXICON.UNEXPECTED_ERROR)
+        await callback.answer(LEXICON.UNEXPECTED_ERROR)
