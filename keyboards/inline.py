@@ -133,3 +133,24 @@ def get_notify_confirmation_kb() -> InlineKeyboardMarkup:
             ),
         ]]
     )
+
+
+# --- НОВА ФУНКЦІЯ ---
+def get_my_list_kb() -> InlineKeyboardMarkup:
+    """
+    Створює клавіатуру для керування поточним списком користувача.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=LEXICON.SAVE_LIST_BUTTON,
+                    callback_data="save_list"
+                ),
+                InlineKeyboardButton(
+                    text=LEXICON.CANCEL_LIST_BUTTON,
+                    callback_data="cancel_list:confirm"
+                )
+            ]
+        ]
+    )

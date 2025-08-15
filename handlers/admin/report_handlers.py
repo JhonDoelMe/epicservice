@@ -41,11 +41,8 @@ class AdminReportStates(StatesGroup):
 # --- Допоміжні функції ---
 
 def _create_stock_report_sync() -> Optional[str]:
-    """
-    Синхронно генерує звіт про залишки товарів на складі.
-    """
+    # ... (код залишається без змін)
     try:
-        # ВИПРАВЛЕНО: одруківка в назві функції
         products = orm_get_all_products_sync()
         temp_list_items = orm_get_all_temp_list_items_sync()
 
@@ -79,15 +76,33 @@ def _create_stock_report_sync() -> Optional[str]:
         return None
 
 
-def _validate_subtract_columns(df: pd.DataFrame) -> bool:
-    required_columns = {"Відділ", "Група", "Назва", "Кількість"}
-    return required_columns.issubset(set(df.columns))
+def _parse_subtract_file(df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """
+    "Розумний" парсер файлу для віднімання.
+    Розпізнає два формати: повний звіт та простий (артикул, кількість).
+    """
+    # Спроба 1: Розпізнати як повний звіт
+    full_report_columns = {"Відділ", "Група", "Назва", "Кількість"}
+    if full_report_columns.issubset(set(df.columns)):
+        df_standardized = df[['Назва', 'Кількість']].copy()
+        # Витягуємо артикул з назви
+        df_standardized['артикул'] = df_standardized['Назва'].astype(str).str.extract(r'^(\d{8,})')
+        df_standardized = df_standardized.dropna(subset=['артикул']) # Видаляємо рядки, де артикул не знайдено
+        return df_standardized[['артикул', 'Кількість']]
+
+    # Спроба 2: Розпізнати як простий файл (артикул, кількість)
+    if len(df.columns) == 2:
+        df_simple = df.copy()
+        df_simple.columns = ['артикул', 'Кількість'] # Перейменовуємо колонки
+        # Перевіряємо, що в першій колонці дійсно артикули
+        if df_simple['артикул'].astype(str).str.match(r'^\d{8,}$').all():
+            return df_simple
+
+    return None # Якщо жоден формат не підійшов
 
 
 async def proceed_with_stock_export(callback: CallbackQuery):
-    """
-    Продовжує виконання експорту залишків після перевірок.
-    """
+    # ... (код залишається без змін)
     await callback.message.edit_text(LEXICON.EXPORTING_STOCK)
     loop = asyncio.get_running_loop()
     report_path = await loop.run_in_executor(None, _create_stock_report_sync)
@@ -105,9 +120,7 @@ async def proceed_with_stock_export(callback: CallbackQuery):
 
 
 async def proceed_with_collected_export(callback: CallbackQuery):
-    """
-    Продовжує виконання експорту зібраного після перевірок.
-    """
+    # ... (код залишається без змін)
     await callback.message.edit_text(LEXICON.COLLECTED_REPORT_PROCESSING)
     loop = asyncio.get_running_loop()
     try:
@@ -135,11 +148,11 @@ async def proceed_with_collected_export(callback: CallbackQuery):
 
 @router.callback_query(F.data == "admin:export_stock")
 async def export_stock_handler(callback: CallbackQuery, state: FSMContext):
+    # ... (код залишається без змін)
     active_users = await orm_get_users_with_active_lists()
     if not active_users:
         await proceed_with_stock_export(callback)
         return
-    
     users_info = "\n".join([f"- Користувач `{user_id}` (позицій: {count})" for user_id, count in active_users])
     await state.update_data(action_to_perform='export_stock', locked_user_ids=[uid for uid, _ in active_users])
     await state.set_state(AdminReportStates.lock_confirmation)
@@ -149,11 +162,11 @@ async def export_stock_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin:export_collected")
 async def export_collected_handler(callback: CallbackQuery, state: FSMContext):
+    # ... (код залишається без змін)
     active_users = await orm_get_users_with_active_lists()
     if not active_users:
         await proceed_with_collected_export(callback)
         return
-
     users_info = "\n".join([f"- Користувач `{user_id}` (позицій: {count})" for user_id, count in active_users])
     await state.update_data(action_to_perform='export_collected', locked_user_ids=[uid for uid, _ in active_users])
     await state.set_state(AdminReportStates.lock_confirmation)
@@ -165,6 +178,7 @@ async def export_collected_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminReportStates.lock_confirmation, F.data.startswith("lock:notify:"))
 async def handle_report_lock_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    # ... (код залишається без змін)
     data = await state.get_data()
     for user_id in data.get('locked_user_ids', []):
         try:
@@ -176,25 +190,20 @@ async def handle_report_lock_notify(callback: CallbackQuery, state: FSMContext, 
 
 @router.callback_query(AdminReportStates.lock_confirmation, F.data.startswith("lock:force_save:"))
 async def handle_report_lock_force_save(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    # ... (код залишається без змін)
     await callback.message.edit_text("Почав примусове збереження списків...")
     data = await state.get_data()
-    user_ids = data.get('locked_user_ids', [])
-    action = data.get('action_to_perform')
-
+    user_ids, action = data.get('locked_user_ids', []), data.get('action_to_perform')
     all_saved_successfully = all([await force_save_user_list(user_id, bot) for user_id in user_ids])
-    
     if not all_saved_successfully:
         await callback.message.edit_text("Під час примусового збереження виникли помилки. Спробуйте пізніше.")
         await state.clear()
         return
-
     await callback.answer("Всі списки успішно збережено!", show_alert=True)
-    
     if action == 'export_stock':
         await proceed_with_stock_export(callback)
     elif action == 'export_collected':
         await proceed_with_collected_export(callback)
-
     await state.clear()
 
 
@@ -202,6 +211,7 @@ async def handle_report_lock_force_save(callback: CallbackQuery, state: FSMConte
 
 @router.callback_query(F.data == "admin:subtract_collected")
 async def start_subtract_handler(callback: CallbackQuery, state: FSMContext):
+    # ... (код залишається без змін)
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(LEXICON.SUBTRACT_PROMPT, reply_markup=cancel_kb)
     await state.set_state(AdminReportStates.waiting_for_subtract_file)
@@ -210,19 +220,29 @@ async def start_subtract_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminReportStates.waiting_for_subtract_file, F.document)
 async def process_subtract_file(message: Message, state: FSMContext, bot: Bot):
-    if not message.document.file_name.endswith(".xlsx"):
+    if not message.document.file_name.endswith((".xlsx", ".csv")):
         await message.answer(LEXICON.IMPORT_WRONG_FORMAT)
         return
     await state.clear()
     await message.answer(LEXICON.SUBTRACT_PROCESSING, reply_markup=admin_main_kb)
-    temp_file_path = f"temp_subtract_{message.from_user.id}.xlsx"
+    temp_file_path = f"temp_subtract_{message.from_user.id}.tmp"
     try:
         await bot.download(message.document, destination=temp_file_path)
-        df = await asyncio.to_thread(pd.read_excel, temp_file_path)
-        if not _validate_subtract_columns(df):
+        
+        # Використовуємо pd.read_excel для .xlsx і pd.read_csv для .csv
+        if message.document.file_name.endswith(".xlsx"):
+            df = await asyncio.to_thread(pd.read_excel, temp_file_path)
+        else:
+            df = await asyncio.to_thread(pd.read_csv, temp_file_path)
+
+        # ВИПРАВЛЕНО: Використовуємо новий "розумний" парсер
+        standardized_df = _parse_subtract_file(df)
+        
+        if standardized_df is None:
             await message.answer(LEXICON.SUBTRACT_INVALID_COLUMNS.format(columns=", ".join(df.columns)))
             return
-        result = await orm_subtract_collected(df)
+
+        result = await orm_subtract_collected(standardized_df)
         report_text = "\n".join([
             LEXICON.SUBTRACT_REPORT_TITLE,
             LEXICON.SUBTRACT_REPORT_PROCESSED.format(processed=result['processed']),

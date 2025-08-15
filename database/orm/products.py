@@ -141,18 +141,22 @@ async def orm_smart_import(dataframe: pd.DataFrame) -> dict:
 def _sync_subtract_collected_from_stock(dataframe: pd.DataFrame) -> dict:
     """
     Синхронно віднімає кількість зібраних товарів від залишків у базі.
+    Приймає стандартизований DataFrame з колонками 'артикул' та 'Кількість'.
     """
     processed_count, not_found_count, error_count = 0, 0, 0
     with sync_session() as session:
         for _, row in dataframe.iterrows():
-            article = _extract_article(str(row.get("Назва", "")))
+            # ВИПРАВЛЕНО: Беремо артикул напряму з підготовленого DataFrame
+            article = str(row.get("артикул", "")).strip()
             if not article:
                 continue
+
             product = session.execute(select(Product).where(Product.артикул == article)).scalar_one_or_none()
             if not product:
                 not_found_count += 1
                 logger.warning(f"Віднімання: товар з артикулом {article} не знайдено в БД.")
                 continue
+
             try:
                 current_stock = float(str(product.кількість).replace(',', '.'))
                 quantity_to_subtract = float(str(row["Кількість"]).replace(',', '.'))
