@@ -1,3 +1,5 @@
+# epicservice/bot.py
+
 import asyncio
 import logging
 import sys
@@ -7,11 +9,16 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import BotCommand
 from sqlalchemy import text
 
-from config import BOT_TOKEN, ADMIN_IDS
+from config import BOT_TOKEN
 from database.engine import async_session
-from handlers import (admin_panel, archive, common, error_handler, user_lists,
-                      user_search)
-from keyboards.reply import user_main_kb, admin_main_kb
+from handlers import (archive, common, error_handler, user_search)
+from handlers.admin import (archive_handlers as admin_archive,
+                            core as admin_core,
+                            import_handlers as admin_import,
+                            report_handlers as admin_reports)
+from handlers.user import (item_addition, list_management, list_saving)
+# Імпортуємо наш новий middleware
+from middlewares.logging_middleware import LoggingMiddleware
 from scheduler import setup_scheduler
 
 
@@ -29,18 +36,22 @@ async def main():
     """
     Головна асинхронна функція для ініціалізації та запуску бота.
     """
-    # 1. Налаштування логування
+    # 1. Оновлюємо налаштування логування, додаючи user_id та update_id до формату
+    log_format = (
+        "%(asctime)s - %(levelname)s - "
+        "[User:%(user_id)s | Update:%(update_id)s] - "
+        "%(name)s - %(message)s"
+    )
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+        format=log_format,
         handlers=[
-            logging.StreamHandler(sys.stdout), # Вивід логів у консоль
-            logging.FileHandler('bot.log', mode='a') # Запис логів у файл
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('bot.log', mode='a')
         ]
     )
     logger = logging.getLogger(__name__)
     
-    # Перевірка наявності токена
     if not BOT_TOKEN:
         logger.critical("Критична помилка: BOT_TOKEN не знайдено! Перевірте ваш .env файл.")
         sys.exit(1)
@@ -60,27 +71,31 @@ async def main():
         link_preview_is_disabled=True
     ))
     dp = Dispatcher()
+    
+    # --- Реєстрація Middleware ---
+    # Реєструємо наш middleware на рівні всіх оновлень (найвищий рівень)
+    dp.update.middleware(LoggingMiddleware())
 
     # 4. Налаштування та запуск планувальника
-    # Планувальник відповідає за фонові задачі (напр., видалення старих списків)
     scheduler = setup_scheduler(bot)
     scheduler.start()
     logger.info("Сервіс планувальника завдань успішно запущено.")
 
     # 5. Реєстрація роутерів (обробників повідомлень)
-    # Порядок реєстрації важливий!
-    dp.include_router(error_handler.router) # Обробник помилок має бути першим
-    dp.include_router(admin_panel.router)   # Спочатку специфічні роутери (адмін)
-    dp.include_router(common.router)        # Загальні команди (/start)
-    dp.include_router(archive.router)       # Обробники кнопок меню
-    dp.include_router(user_lists.router)    # Обробники кнопок меню та станів FSM
-    dp.include_router(user_search.router)   # Обробник пошуку (ловить будь-який текст) має бути останнім
+    dp.include_router(error_handler.router)
+    dp.include_router(admin_core.router)
+    dp.include_router(admin_import.router)
+    dp.include_router(admin_reports.router)
+    dp.include_router(admin_archive.router)
+    dp.include_router(common.router)
+    dp.include_router(archive.router)
+    dp.include_router(list_management.router)
+    dp.include_router(item_addition.router)
+    dp.include_router(list_saving.router)
+    dp.include_router(user_search.router)
 
     try:
-        # Встановлюємо меню команд
         await set_main_menu(bot)
-        
-        # Видаляємо вебхук та накопичені оновлення
         await bot.delete_webhook(drop_pending_updates=True)
         
         logger.info("Бот запускається...")

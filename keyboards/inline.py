@@ -1,7 +1,9 @@
+# epicservice/keyboards/inline.py
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from lexicon.lexicon import LEXICON
 from database.models import Product
+from lexicon.lexicon import LEXICON
 
 
 def get_admin_panel_kb() -> InlineKeyboardMarkup:
@@ -12,7 +14,6 @@ def get_admin_panel_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text=LEXICON.BUTTON_IMPORT_PRODUCTS, callback_data="admin:import_products")],
             [InlineKeyboardButton(text=LEXICON.BUTTON_EXPORT_STOCK, callback_data="admin:export_stock")],
-            # У вашій версії коду тут була відсутня кнопка, я її додав згідно з лексиконом
             [InlineKeyboardButton(text=LEXICON.EXPORT_COLLECTED_BUTTON, callback_data="admin:export_collected")],
             [InlineKeyboardButton(text=LEXICON.BUTTON_SUBTRACT_COLLECTED, callback_data="admin:subtract_collected")],
             [InlineKeyboardButton(text=LEXICON.BUTTON_USER_ARCHIVES, callback_data="admin:user_archives")],
@@ -24,12 +25,6 @@ def get_admin_panel_kb() -> InlineKeyboardMarkup:
 def get_users_with_archives_kb(users: list) -> InlineKeyboardMarkup:
     """
     Створює клавіатуру зі списком користувачів, які мають збережені архіви.
-
-    Args:
-        users: Список кортежів, де кожен кортеж - (user_id, lists_count).
-
-    Returns:
-        Клавіатура зі списком користувачів та кнопкою "Назад".
     """
     keyboard = []
     for user_id, lists_count in users:
@@ -49,14 +44,6 @@ def get_users_with_archives_kb(users: list) -> InlineKeyboardMarkup:
 def get_archive_kb(user_id: int, is_admin_view: bool = False) -> InlineKeyboardMarkup:
     """
     Створює клавіатуру для меню архіву користувача.
-
-    Args:
-        user_id: ID користувача, для якого створюється клавіатура.
-        is_admin_view: Прапорець, що вказує, чи переглядає архів адміністратор.
-                       Якщо True, додає кнопку "Назад до списку користувачів".
-
-    Returns:
-        Клавіатура з кнопкою для завантаження ZIP та, опціонально, кнопкою "Назад".
     """
     keyboard = [[
         InlineKeyboardButton(text=LEXICON.BUTTON_PACK_IN_ZIP, callback_data=f"download_zip:{user_id}")
@@ -71,16 +58,9 @@ def get_archive_kb(user_id: int, is_admin_view: bool = False) -> InlineKeyboardM
 def get_search_results_kb(products: list[Product]) -> InlineKeyboardMarkup:
     """
     Створює клавіатуру з результатами пошуку товарів.
-
-    Args:
-        products: Список об'єктів Product, знайдених під час пошуку.
-
-    Returns:
-        Клавіатура зі списком товарів для вибору.
     """
     keyboard = []
     for product in products:
-        # Обрізаємо занадто довгі назви, щоб вони вмістились на кнопці
         button_text = (product.назва[:60] + '..') if len(product.назва) > 62 else product.назва
         keyboard.append([
             InlineKeyboardButton(text=button_text, callback_data=f"product:{product.id}")
@@ -91,17 +71,9 @@ def get_search_results_kb(products: list[Product]) -> InlineKeyboardMarkup:
 def get_product_actions_kb(product_id: int, available_quantity: int) -> InlineKeyboardMarkup:
     """
     Створює клавіатуру дій для картки товару.
-
-    Args:
-        product_id: ID товару.
-        available_quantity: Доступна кількість товару для додавання в список.
-
-    Returns:
-        Клавіатура з кнопками "Додати все" та "Ввести іншу кількість".
     """
     keyboard = []
 
-    # Кнопка "Додати все" з'являється тільки якщо є що додавати
     if available_quantity > 0:
         add_all_text = LEXICON.BUTTON_ADD_ALL.format(quantity=available_quantity)
         keyboard.append([
@@ -118,17 +90,46 @@ def get_product_actions_kb(product_id: int, available_quantity: int) -> InlineKe
 def get_confirmation_kb(confirm_callback: str, cancel_callback: str) -> InlineKeyboardMarkup:
     """
     Створює універсальну клавіатуру підтвердження дії (Так/Ні).
-
-    Args:
-        confirm_callback: Рядок callback_data для кнопки "Так".
-        cancel_callback: Рядок callback_data для кнопки "Ні".
-
-    Returns:
-        Клавіатура з кнопками "Так" та "Ні".
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(text=LEXICON.BUTTON_CONFIRM_YES, callback_data=confirm_callback),
             InlineKeyboardButton(text=LEXICON.BUTTON_CONFIRM_NO, callback_data=cancel_callback),
+        ]]
+    )
+
+
+def get_admin_lock_kb(action: str) -> InlineKeyboardMarkup:
+    """
+    Створює клавіатуру для адміна, коли дія заблокована через активні списки.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text=LEXICON.BUTTON_NOTIFY_USERS,
+                callback_data=f"lock:notify:{action}"
+            ),
+            InlineKeyboardButton(
+                text=LEXICON.BUTTON_FORCE_SAVE,
+                callback_data=f"lock:force_save:{action}"
+            )
+        ]]
+    )
+
+
+def get_notify_confirmation_kb() -> InlineKeyboardMarkup:
+    """
+    Створює клавіатуру для підтвердження розсилки сповіщень користувачам.
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text=LEXICON.BUTTON_YES_NOTIFY,
+                callback_data="notify_confirm:yes"
+            ),
+            InlineKeyboardButton(
+                text=LEXICON.BUTTON_NO_NOTIFY,
+                callback_data="notify_confirm:no"
+            ),
         ]]
     )
