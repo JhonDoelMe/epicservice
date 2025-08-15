@@ -15,8 +15,8 @@ from handlers import (archive, common, error_handler, user_search)
 from handlers.admin import (archive_handlers as admin_archive,
                             core as admin_core,
                             import_handlers as admin_import,
-                            report_handlers as admin_reports)
-# Імпортуємо новий модуль для редагування
+                            report_handlers as admin_reports,
+                            status_reports as admin_status) # <-- ДОДАНО НОВИЙ ІМПОРТ
 from handlers.user import (item_addition, list_editing, list_management,
                            list_saving)
 from middlewares.logging_middleware import LoggingMiddleware
@@ -51,7 +51,7 @@ async def main():
         ]
     )
     logger = logging.getLogger(__name__)
-    
+
     if not BOT_TOKEN:
         logger.critical("Критична помилка: BOT_TOKEN не знайдено! Перевірте ваш .env файл.")
         sys.exit(1)
@@ -63,13 +63,13 @@ async def main():
     except Exception as e:
         logger.critical("Помилка підключення до бази даних: %s", e, exc_info=True)
         sys.exit(1)
-    
+
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(
         parse_mode="Markdown",
         link_preview_is_disabled=True
     ))
     dp = Dispatcher()
-    
+
     dp.update.middleware(LoggingMiddleware())
 
     scheduler = setup_scheduler(bot)
@@ -82,24 +82,22 @@ async def main():
     dp.include_router(admin_import.router)
     dp.include_router(admin_reports.router)
     dp.include_router(admin_archive.router)
+    dp.include_router(admin_status.router)  # <-- ДОДАНО НОВИЙ РОУТЕР
     dp.include_router(common.router)
     dp.include_router(archive.router)
-    
-    # Реєструємо роутери користувача в логічному порядку
     dp.include_router(list_management.router)
     dp.include_router(item_addition.router)
-    dp.include_router(list_editing.router) # <-- ДОДАНО НОВИЙ РОУТЕР
+    dp.include_router(list_editing.router)
     dp.include_router(list_saving.router)
-
-    dp.include_router(user_search.router) # Пошук завжди останній
+    dp.include_router(user_search.router)
 
     try:
         await set_main_menu(bot)
         await bot.delete_webhook(drop_pending_updates=True)
-        
+
         logger.info("Бот запускається...")
         await dp.start_polling(bot)
-        
+
     except Exception as e:
         logger.critical("Критична помилка під час роботи бота: %s", e, exc_info=True)
     finally:

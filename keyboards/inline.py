@@ -12,6 +12,11 @@ def get_admin_panel_kb() -> InlineKeyboardMarkup:
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            # Новий рядок з кнопками звітів
+            [
+                InlineKeyboardButton(text=LEXICON.BUTTON_STOCK_STATUS, callback_data="admin:stock_status"),
+                InlineKeyboardButton(text=LEXICON.BUTTON_COLLECTION_STATUS, callback_data="admin:collection_status")
+            ],
             [InlineKeyboardButton(text=LEXICON.BUTTON_IMPORT_PRODUCTS, callback_data="admin:import_products")],
             [InlineKeyboardButton(text=LEXICON.BUTTON_EXPORT_STOCK, callback_data="admin:export_stock")],
             [InlineKeyboardButton(text=LEXICON.EXPORT_COLLECTED_BUTTON, callback_data="admin:export_collected")],
@@ -148,7 +153,7 @@ def get_my_list_kb() -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(
                     text=LEXICON.EDIT_LIST_BUTTON,
-                    callback_data="edit_list:start" # Додаємо ":start" для чіткості
+                    callback_data="edit_list:start"
                 ),
                 InlineKeyboardButton(
                     text=LEXICON.CANCEL_LIST_BUTTON,
@@ -159,7 +164,6 @@ def get_my_list_kb() -> InlineKeyboardMarkup:
     )
 
 
-# --- НОВА ФУНКЦІЯ ---
 def get_list_for_editing_kb(temp_list: list[TempList]) -> InlineKeyboardMarkup:
     """
     Створює клавіатуру для режиму редагування списку.
@@ -175,7 +179,6 @@ def get_list_for_editing_kb(temp_list: list[TempList]) -> InlineKeyboardMarkup:
             )
         ])
     
-    # Додаємо кнопку для виходу з режиму редагування
     keyboard.append([
         InlineKeyboardButton(text="✅ Завершити редагування", callback_data="edit_list:finish")
     ])
