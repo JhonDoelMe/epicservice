@@ -2,7 +2,7 @@
 
 import logging
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, Message)
@@ -14,31 +14,23 @@ from keyboards.inline import get_confirmation_kb, get_my_list_kb
 from keyboards.reply import admin_main_kb, user_main_kb
 from lexicon.lexicon import LEXICON
 
-# Налаштовуємо логер
 logger = logging.getLogger(__name__)
-
-# Створюємо роутер
 router = Router()
 
-
-# Оновлюємо стани FSM
 class ListManagementStates(StatesGroup):
     confirm_new_list = State()
     confirm_cancel_list = State()
 
-
-# --- ДОПОМІЖНА ФУНКЦІЯ ---
-async def _display_user_list(message: Message):
+# ВИПРАВЛЕНО: Функція тепер приймає ID і об'єкт бота
+async def _display_user_list(bot: Bot, chat_id: int, user_id: int):
     """
     Основна логіка для відображення поточного списку користувача.
     """
-    user_id = message.chat.id
     reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
-
     try:
         temp_list = await orm_get_temp_list(user_id)
         if not temp_list:
-            await message.answer(LEXICON.EMPTY_LIST, reply_markup=reply_kb)
+            await bot.send_message(chat_id, LEXICON.EMPTY_LIST, reply_markup=reply_kb)
             return
 
         department_id = temp_list[0].product.відділ
@@ -58,15 +50,14 @@ async def _display_user_list(message: Message):
 
         for i, part in enumerate(parts):
             if i == len(parts) - 1:
-                await message.answer(part, reply_markup=get_my_list_kb())
+                await bot.send_message(chat_id, part, reply_markup=get_my_list_kb())
             else:
-                await message.answer(part)
+                await bot.send_message(chat_id, part)
     except Exception as e:
         logger.error("Помилка відображення списку для %s: %s", user_id, e, exc_info=True)
-        await message.answer(LEXICON.UNEXPECTED_ERROR, reply_markup=reply_kb)
+        await bot.send_message(chat_id, LEXICON.UNEXPECTED_ERROR, reply_markup=reply_kb)
 
-
-# --- Сценарій створення нового списку ---
+# --- Сценарії ---
 
 @router.message(F.text == LEXICON.BUTTON_NEW_LIST)
 async def new_list_handler(message: Message, state: FSMContext):
@@ -75,7 +66,6 @@ async def new_list_handler(message: Message, state: FSMContext):
         reply_markup=get_confirmation_kb("confirm_new_list", "cancel_new_list"),
     )
     await state.set_state(ListManagementStates.confirm_new_list)
-
 
 @router.callback_query(ListManagementStates.confirm_new_list, F.data == "confirm_new_list")
 async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
@@ -90,26 +80,16 @@ async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
     finally:
         await callback.answer()
 
-
 @router.callback_query(ListManagementStates.confirm_new_list, F.data == "cancel_new_list")
 async def new_list_canceled(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(LEXICON.ACTION_CANCELED)
     await callback.answer()
 
-
-# --- Сценарій перегляду поточного списку ---
-
 @router.message(F.text == LEXICON.BUTTON_MY_LIST)
-async def my_list_handler(message: Message):
-    """
-    Обробник, що викликається кнопкою. Показує список.
-    """
-    # ВИПРАВЛЕНО: Зайве повідомлення видалено
-    await _display_user_list(message)
-
-
-# --- Сценарій скасування поточного списку ---
+async def my_list_handler(message: Message, bot: Bot):
+    # ВИПРАВЛЕНО: Викликаємо оновлену функцію
+    await _display_user_list(bot, message.chat.id, message.from_user.id)
 
 @router.callback_query(F.data == "cancel_list:confirm")
 async def cancel_list_confirm_handler(callback: CallbackQuery, state: FSMContext):
@@ -120,28 +100,25 @@ async def cancel_list_confirm_handler(callback: CallbackQuery, state: FSMContext
     await state.set_state(ListManagementStates.confirm_cancel_list)
     await callback.answer()
 
-
 @router.callback_query(ListManagementStates.confirm_cancel_list, F.data == "cancel_list:yes")
 async def cancel_list_confirmed(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
+    reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
     await state.clear()
     try:
         await orm_clear_temp_list(user_id)
-        await callback.message.edit_text(LEXICON.LIST_CANCELED)
+        await callback.message.delete()
+        await callback.message.answer(LEXICON.LIST_CANCELED, reply_markup=reply_kb)
     except SQLAlchemyError as e:
         logger.error("Помилка БД при скасуванні списку для %s: %s", user_id, e, exc_info=True)
         await callback.message.edit_text(LEXICON.UNEXPECTED_ERROR)
     finally:
         await callback.answer()
 
-
 @router.callback_query(ListManagementStates.confirm_cancel_list, F.data == "cancel_list:no")
-async def cancel_list_declined(callback: CallbackQuery, state: FSMContext):
-    """
-    Обробляє відмову від скасування. Повертає користувача до перегляду списку.
-    """
+async def cancel_list_declined(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await state.clear()
     await callback.message.delete()
-    # ВИПРАВЛЕНО: Тепер тут теж використовується нова функція
-    await _display_user_list(callback.message)
+    # ВИПРАВЛЕНО: Викликаємо оновлену функцію з правильним контекстом
+    await _display_user_list(bot, callback.message.chat.id, callback.from_user.id)
     await callback.answer()

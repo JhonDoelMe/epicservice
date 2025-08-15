@@ -17,12 +17,14 @@ from .products import (
 from .temp_lists import (
     orm_add_item_to_temp_list,
     orm_clear_temp_list,
+    orm_delete_temp_list_item, # <-- ДОДАНО
     orm_get_all_temp_list_items_sync,
     orm_get_temp_list,
     orm_get_temp_list_department,
     orm_get_temp_list_item_quantity,
     orm_get_total_temp_reservation_for_product,
     orm_get_users_with_active_lists,
+    orm_update_temp_list_item_quantity, # <-- ДОДАНО
 )
 
 # Імпортуємо всі функції з модуля для роботи з архівами (збереженими списками)
@@ -56,12 +58,14 @@ __all__ = [
     # temp_lists
     "orm_clear_temp_list",
     "orm_add_item_to_temp_list",
+    "orm_delete_temp_list_item", # <-- ДОДАНО
     "orm_get_temp_list",
     "orm_get_temp_list_department",
     "orm_get_temp_list_item_quantity",
     "orm_get_total_temp_reservation_for_product",
     "orm_get_all_temp_list_items_sync",
     "orm_get_users_with_active_lists",
+    "orm_update_temp_list_item_quantity", # <-- ДОДАНО
     # archives
     "orm_add_saved_list",
     "orm_update_reserved_quantity",

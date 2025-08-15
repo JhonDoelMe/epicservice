@@ -2,7 +2,7 @@
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from database.models import Product
+from database.models import Product, TempList
 from lexicon.lexicon import LEXICON
 
 
@@ -135,7 +135,6 @@ def get_notify_confirmation_kb() -> InlineKeyboardMarkup:
     )
 
 
-# --- НОВА ФУНКЦІЯ ---
 def get_my_list_kb() -> InlineKeyboardMarkup:
     """
     Створює клавіатуру для керування поточним списком користувача.
@@ -148,9 +147,36 @@ def get_my_list_kb() -> InlineKeyboardMarkup:
                     callback_data="save_list"
                 ),
                 InlineKeyboardButton(
+                    text=LEXICON.EDIT_LIST_BUTTON,
+                    callback_data="edit_list:start" # Додаємо ":start" для чіткості
+                ),
+                InlineKeyboardButton(
                     text=LEXICON.CANCEL_LIST_BUTTON,
                     callback_data="cancel_list:confirm"
                 )
             ]
         ]
     )
+
+
+# --- НОВА ФУНКЦІЯ ---
+def get_list_for_editing_kb(temp_list: list[TempList]) -> InlineKeyboardMarkup:
+    """
+    Створює клавіатуру для режиму редагування списку.
+    Кожен товар у списку стає кнопкою.
+    """
+    keyboard = []
+    for item in temp_list:
+        button_text = f"✏️ {item.product.артикул} ({item.quantity} шт.)"
+        keyboard.append([
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"edit_item:{item.product_id}"
+            )
+        ])
+    
+    # Додаємо кнопку для виходу з режиму редагування
+    keyboard.append([
+        InlineKeyboardButton(text="✅ Завершити редагування", callback_data="edit_list:finish")
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)

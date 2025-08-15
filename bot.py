@@ -16,8 +16,9 @@ from handlers.admin import (archive_handlers as admin_archive,
                             core as admin_core,
                             import_handlers as admin_import,
                             report_handlers as admin_reports)
-from handlers.user import (item_addition, list_management, list_saving)
-# Імпортуємо наш новий middleware
+# Імпортуємо новий модуль для редагування
+from handlers.user import (item_addition, list_editing, list_management,
+                           list_saving)
 from middlewares.logging_middleware import LoggingMiddleware
 from scheduler import setup_scheduler
 
@@ -36,7 +37,6 @@ async def main():
     """
     Головна асинхронна функція для ініціалізації та запуску бота.
     """
-    # 1. Оновлюємо налаштування логування, додаючи user_id та update_id до формату
     log_format = (
         "%(asctime)s - %(levelname)s - "
         "[User:%(user_id)s | Update:%(update_id)s] - "
@@ -56,7 +56,6 @@ async def main():
         logger.critical("Критична помилка: BOT_TOKEN не знайдено! Перевірте ваш .env файл.")
         sys.exit(1)
 
-    # 2. Перевірка підключення до бази даних
     try:
         async with async_session() as session:
             await session.execute(text('SELECT 1'))
@@ -65,23 +64,19 @@ async def main():
         logger.critical("Помилка підключення до бази даних: %s", e, exc_info=True)
         sys.exit(1)
     
-    # 3. Ініціалізація бота та диспетчера
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(
         parse_mode="Markdown",
         link_preview_is_disabled=True
     ))
     dp = Dispatcher()
     
-    # --- Реєстрація Middleware ---
-    # Реєструємо наш middleware на рівні всіх оновлень (найвищий рівень)
     dp.update.middleware(LoggingMiddleware())
 
-    # 4. Налаштування та запуск планувальника
     scheduler = setup_scheduler(bot)
     scheduler.start()
     logger.info("Сервіс планувальника завдань успішно запущено.")
 
-    # 5. Реєстрація роутерів (обробників повідомлень)
+    # --- Реєстрація роутерів ---
     dp.include_router(error_handler.router)
     dp.include_router(admin_core.router)
     dp.include_router(admin_import.router)
@@ -89,10 +84,14 @@ async def main():
     dp.include_router(admin_archive.router)
     dp.include_router(common.router)
     dp.include_router(archive.router)
+    
+    # Реєструємо роутери користувача в логічному порядку
     dp.include_router(list_management.router)
     dp.include_router(item_addition.router)
+    dp.include_router(list_editing.router) # <-- ДОДАНО НОВИЙ РОУТЕР
     dp.include_router(list_saving.router)
-    dp.include_router(user_search.router)
+
+    dp.include_router(user_search.router) # Пошук завжди останній
 
     try:
         await set_main_menu(bot)

@@ -25,6 +25,7 @@ class ItemAdditionStates(StatesGroup):
 @router.callback_query(F.data.startswith("add_all:"))
 async def add_all_callback(callback: CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
+    reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
     try:
         _, product_id_str, quantity_str = callback.data.split(":")
         product_id = int(product_id_str)
@@ -42,6 +43,7 @@ async def add_all_callback(callback: CallbackQuery, bot: Bot):
             logger.info("Користувач %s додав товар ID %s (кількість: %s) до списку.", user_id, product_id, quantity)
             await callback.answer(f"✅ Додано {quantity} шт.")
             await send_or_edit_product_card(bot, callback.message.chat.id, user_id, product, callback.message.message_id)
+            
     except Exception as e:
         logger.error("Неочікувана помилка додавання товару для %s: %s", user_id, e, exc_info=True)
         await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
@@ -93,12 +95,11 @@ async def process_quantity(message: Message, state: FSMContext, bot: Bot):
     try:
         quantity = int(message.text)
         data = await state.get_data()
+        
         await message.delete()
         await bot.delete_message(message.chat.id, data['prompt_message_id'])
 
-        # ВИПРАВЛЕНО: Спрощена логіка. Ми не надсилаємо тимчасових повідомлень.
         if quantity <= 0:
-            # Якщо введено 0, просто відновлюємо картку і повертаємо головну клавіатуру
             await message.answer(LEXICON.CANCEL_ACTION, reply_markup=reply_kb)
             async with async_session() as session:
                 product = await orm_get_product_by_id(session, data['product_id'])
@@ -109,8 +110,7 @@ async def process_quantity(message: Message, state: FSMContext, bot: Bot):
 
         product_id = data.get("product_id")
         await orm_add_item_to_temp_list(user_id, product_id, quantity)
-
-        # Надсилаємо ОДНЕ фінальне повідомлення, яке повертає клавіатуру
+        
         await message.answer(f"✅ Додано {quantity} шт. до вашого списку.", reply_markup=reply_kb)
 
         async with async_session() as session:
