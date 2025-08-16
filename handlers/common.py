@@ -9,7 +9,10 @@ from aiogram.types import Message
 from config import ADMIN_IDS
 # Імпортуємо нову функцію для роботи з користувачами
 from database.orm import orm_upsert_user
-from keyboards.reply import admin_main_kb, user_main_kb
+# --- ЗМІНА: Імпортуємо нові inline-клавіатури ---
+from keyboards.inline import get_admin_main_kb, get_user_main_kb
+# --- ВИДАЛЕНО: Старі reply-клавіатури ---
+# from keyboards.reply import admin_main_kb, user_main_kb
 from lexicon.lexicon import LEXICON
 
 logger = logging.getLogger(__name__)
@@ -35,15 +38,17 @@ async def cmd_start(message: Message):
         logger.info("Обробка команди /start для користувача %s.", user.id)
         
         if user.id in ADMIN_IDS:
+            # --- ЗМІНА: Використовуємо нову inline-клавіатуру для адміна ---
             await message.answer(
                 LEXICON.CMD_START_ADMIN,
-                reply_markup=admin_main_kb
+                reply_markup=get_admin_main_kb()
             )
             logger.info("Надано адмін-інтерфейс для %s.", user.id)
         else:
+            # --- ЗМІНА: Використовуємо нову inline-клавіатуру для користувача ---
             await message.answer(
                 LEXICON.CMD_START_USER,
-                reply_markup=user_main_kb
+                reply_markup=get_user_main_kb()
             )
             logger.info("Надано звичайний інтерфейс для %s.", user.id)
             

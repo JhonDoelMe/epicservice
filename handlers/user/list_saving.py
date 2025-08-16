@@ -6,18 +6,20 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from aiogram import F, Router
+# --- ЗМІНА: Додаємо Bot та імпорти для клавіатур ---
+from aiogram import Bot, F, Router
 from aiogram.types import CallbackQuery, FSInputFile
 from sqlalchemy.exc import SQLAlchemyError
 
-from config import ARCHIVES_PATH
+from config import ADMIN_IDS, ARCHIVES_PATH
 from database.engine import async_session
 from database.orm import (orm_add_saved_list, orm_clear_temp_list,
                           orm_get_product_by_id, orm_get_temp_list,
                           orm_update_reserved_quantity)
+# --- ЗМІНА: Імпортуємо клавіатури головного меню ---
+from keyboards.inline import get_admin_main_kb, get_user_main_kb
 from lexicon.lexicon import LEXICON
 
-# ... (решта файлу без змін до функції save_list_callback) ...
 logger = logging.getLogger(__name__)
 router = Router()
 
@@ -26,6 +28,7 @@ async def _save_list_to_excel(
     user_id: int,
     prefix: str = ""
 ) -> Optional[str]:
+    # ... (код без змін)
     if not items:
         return None
     try:
@@ -45,7 +48,7 @@ async def _save_list_to_excel(
 
 
 @router.callback_query(F.data == "save_list")
-async def save_list_callback(callback: CallbackQuery):
+async def save_list_callback(callback: CallbackQuery, bot: Bot): # Додаємо bot
     user_id = callback.from_user.id
     await callback.message.edit_text(LEXICON.SAVING_LIST_PROCESS)
     try:
@@ -71,21 +74,15 @@ async def save_list_callback(callback: CallbackQuery):
                     available = stock_qty - (product.відкладено or 0)
                     item_for_excel = {"артикул": product.артикул, "кількість": 0}
 
-                    # --- ВИПРАВЛЕНО: Логіка резервування ---
-                    # Незалежно від наявності, ми резервуємо повну кількість, яку хоче користувач
                     reservation_updates.append({"product_id": product.id, "quantity": item.quantity})
 
                     if item.quantity <= available:
-                        # Якщо товару вистачає, він йде в основний файл
                         item_for_excel["кількість"] = item.quantity
                         in_stock_items.append(item_for_excel)
                     else:
-                        # Якщо товару не вистачає
                         if available > 0:
-                            # Частина, що є, йде в основний файл
                             item_for_excel["кількість"] = available
                             in_stock_items.append(item_for_excel)
-                        # Різниця йде у файл лишків
                         surplus_items.append({
                             "артикул": product.артикул,
                             "кількість": item.quantity - available
@@ -104,18 +101,27 @@ async def save_list_callback(callback: CallbackQuery):
                     await orm_add_saved_list(session, user_id, os.path.basename(file_path), file_path, db_items)
 
                 await orm_clear_temp_list(user_id)
+            
+            # --- ЗМІНА: Блок надсилання файлів та меню ---
+            await callback.message.delete() # Видаляємо повідомлення "Зберігаю..."
 
             if 'file_path' in locals() and file_path and in_stock_items:
-                await callback.message.answer_document(FSInputFile(file_path), caption=LEXICON.MAIN_LIST_SAVED)
+                await bot.send_document(user_id, FSInputFile(file_path), caption=LEXICON.MAIN_LIST_SAVED)
 
             if surplus_items:
                 surplus_path = await _save_list_to_excel(surplus_items, user_id, "лишки_")
                 if surplus_path:
-                    await callback.message.answer_document(FSInputFile(surplus_path), caption=LEXICON.SURPLUS_LIST_CAPTION)
+                    await bot.send_document(user_id, FSInputFile(surplus_path), caption=LEXICON.SURPLUS_LIST_CAPTION)
                     os.remove(surplus_path)
 
-            await callback.message.delete()
             await callback.answer(LEXICON.PROCESSING_COMPLETE, show_alert=True)
+            
+            # Надсилаємо головне меню після всіх дій
+            user = callback.from_user
+            kb = get_admin_main_kb() if user.id in ADMIN_IDS else get_user_main_kb()
+            text = LEXICON.CMD_START_ADMIN if user.id in ADMIN_IDS else LEXICON.CMD_START_USER
+            await bot.send_message(user_id, text, reply_markup=kb)
+            # --- КІНЕЦЬ ЗМІНИ ---
 
     except (SQLAlchemyError, ValueError) as e:
         logger.error("Помилка транзакції при збереженні списку для %s: %s", user_id, e, exc_info=True)

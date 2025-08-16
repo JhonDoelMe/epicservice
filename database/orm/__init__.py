@@ -39,11 +39,14 @@ from .archives import (
 from .users import (
     orm_upsert_user, orm_get_all_users_sync
 )
-# ВИПРАВЛЕНО: Додано імпорти з нового модуля звітів
-from .reports import (
-    orm_get_stock_status_sync,
-    orm_get_collection_status_sync
-)
+
+# --- ЗМІНА ---
+# ВИДАЛЕНО: Імпорти з модуля звітів, оскільки файл reports.py видалено
+# from .reports import (
+#     orm_get_stock_status_sync,
+#     orm_get_collection_status_sync
+# )
+# --- КІНЕЦЬ ЗМІНИ ---
 
 # Явно визначаємо, що саме буде експортуватися
 __all__ = [
@@ -65,6 +68,8 @@ __all__ = [
     "orm_get_users_for_warning_sync",
     # users
     "orm_upsert_user", "orm_get_all_users_sync",
-    # reports
-    "orm_get_stock_status_sync", "orm_get_collection_status_sync"
+    # --- ЗМІНА ---
+    # ВИДАЛЕНО: Назви функцій звітів зі списку __all__
+    # "orm_get_stock_status_sync", "orm_get_collection_status_sync"
 ]
+# --- КІНЕЦЬ ЗМІНИ ---

@@ -1,17 +1,20 @@
 # epicservice/handlers/user/list_management.py
 
 import logging
+import asyncio
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (CallbackQuery, Message)
+# --- ЗМІНА: Додаємо InlineKeyboardMarkup та InlineKeyboardButton ---
+from aiogram.types import (CallbackQuery, Message, 
+                           InlineKeyboardMarkup, InlineKeyboardButton)
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ADMIN_IDS
 from database.orm import orm_clear_temp_list, orm_get_temp_list
-from keyboards.inline import get_confirmation_kb, get_my_list_kb
-from keyboards.reply import admin_main_kb, user_main_kb
+from keyboards.inline import (get_confirmation_kb, get_my_list_kb,
+                              get_admin_main_kb, get_user_main_kb)
 from lexicon.lexicon import LEXICON
 
 logger = logging.getLogger(__name__)
@@ -21,16 +24,23 @@ class ListManagementStates(StatesGroup):
     confirm_new_list = State()
     confirm_cancel_list = State()
 
-# ВИПРАВЛЕНО: Функція тепер приймає ID і об'єкт бота
+
 async def _display_user_list(bot: Bot, chat_id: int, user_id: int):
     """
     Основна логіка для відображення поточного списку користувача.
     """
-    reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
     try:
         temp_list = await orm_get_temp_list(user_id)
         if not temp_list:
-            await bot.send_message(chat_id, LEXICON.EMPTY_LIST, reply_markup=reply_kb)
+            # --- ЗМІНА: Додаємо кнопку "На головну" для порожнього списку ---
+            back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(
+                    text=LEXICON.BUTTON_BACK_TO_MAIN_MENU,
+                    callback_data="main:back"
+                )
+            ]])
+            await bot.send_message(chat_id, LEXICON.EMPTY_LIST, reply_markup=back_kb)
+            # --- КІНЕЦЬ ЗМІНИ ---
             return
 
         department_id = temp_list[0].product.відділ
@@ -55,17 +65,33 @@ async def _display_user_list(bot: Bot, chat_id: int, user_id: int):
                 await bot.send_message(chat_id, part)
     except Exception as e:
         logger.error("Помилка відображення списку для %s: %s", user_id, e, exc_info=True)
-        await bot.send_message(chat_id, LEXICON.UNEXPECTED_ERROR, reply_markup=reply_kb)
+        await bot.send_message(chat_id, LEXICON.UNEXPECTED_ERROR)
 
-# --- Сценарії ---
+@router.callback_query(F.data == "main:back")
+async def back_to_main_menu(callback: CallbackQuery):
+    """
+    Повертає користувача на головний екран, редагуючи поточне повідомлення.
+    """
+    user_id = callback.from_user.id
+    kb = get_admin_main_kb() if user_id in ADMIN_IDS else get_user_main_kb()
+    text = LEXICON.CMD_START_ADMIN if user_id in ADMIN_IDS else LEXICON.CMD_START_USER
+    try:
+        await callback.message.edit_text(text, reply_markup=kb)
+    except Exception: # Якщо повідомлення не можна редагувати, надсилаємо нове
+        await callback.message.answer(text, reply_markup=kb)
+        await callback.message.delete() # і видаляємо старе
+    finally:
+        await callback.answer()
 
-@router.message(F.text == LEXICON.BUTTON_NEW_LIST)
-async def new_list_handler(message: Message, state: FSMContext):
-    await message.answer(
+
+@router.callback_query(F.data == "main:new_list")
+async def new_list_handler(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text(
         LEXICON.NEW_LIST_CONFIRM,
-        reply_markup=get_confirmation_kb("confirm_new_list", "cancel_new_list"),
+        reply_markup=get_confirmation_kb("confirm_new_list", "main:back"),
     )
     await state.set_state(ListManagementStates.confirm_new_list)
+    await callback.answer()
 
 @router.callback_query(ListManagementStates.confirm_new_list, F.data == "confirm_new_list")
 async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
@@ -73,23 +99,32 @@ async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     try:
         await orm_clear_temp_list(user_id)
-        await callback.message.edit_text(LEXICON.NEW_LIST_CONFIRMED)
+        
+        # --- ЗМІНА: Залишаємо користувача в режимі пошуку ---
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=LEXICON.BUTTON_BACK_TO_MAIN_MENU,
+                callback_data="main:back"
+            )
+        ]])
+        await callback.message.edit_text(
+            LEXICON.NEW_LIST_CONFIRMED, 
+            reply_markup=back_kb
+        )
+        # --- КІНЕЦЬ ЗМІНИ ---
+
     except SQLAlchemyError as e:
         logger.error("Помилка БД при очищенні тимчасового списку для %s: %s", user_id, e, exc_info=True)
         await callback.message.edit_text(LEXICON.UNEXPECTED_ERROR)
     finally:
         await callback.answer()
 
-@router.callback_query(ListManagementStates.confirm_new_list, F.data == "cancel_new_list")
-async def new_list_canceled(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text(LEXICON.ACTION_CANCELED)
+@router.callback_query(F.data == "main:my_list")
+async def my_list_handler(callback: CallbackQuery, bot: Bot):
+    await callback.message.delete()
+    await _display_user_list(bot, callback.message.chat.id, callback.from_user.id)
     await callback.answer()
 
-@router.message(F.text == LEXICON.BUTTON_MY_LIST)
-async def my_list_handler(message: Message, bot: Bot):
-    # ВИПРАВЛЕНО: Викликаємо оновлену функцію
-    await _display_user_list(bot, message.chat.id, message.from_user.id)
 
 @router.callback_query(F.data == "cancel_list:confirm")
 async def cancel_list_confirm_handler(callback: CallbackQuery, state: FSMContext):
@@ -103,12 +138,16 @@ async def cancel_list_confirm_handler(callback: CallbackQuery, state: FSMContext
 @router.callback_query(ListManagementStates.confirm_cancel_list, F.data == "cancel_list:yes")
 async def cancel_list_confirmed(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
-    reply_kb = admin_main_kb if user_id in ADMIN_IDS else user_main_kb
     await state.clear()
     try:
         await orm_clear_temp_list(user_id)
         await callback.message.delete()
-        await callback.message.answer(LEXICON.LIST_CANCELED, reply_markup=reply_kb)
+        await callback.message.answer(LEXICON.LIST_CANCELED)
+        
+        user = callback.from_user
+        kb = get_admin_main_kb() if user.id in ADMIN_IDS else get_user_main_kb()
+        text = LEXICON.CMD_START_ADMIN if user.id in ADMIN_IDS else LEXICON.CMD_START_USER
+        await callback.message.answer(text, reply_markup=kb)
     except SQLAlchemyError as e:
         logger.error("Помилка БД при скасуванні списку для %s: %s", user_id, e, exc_info=True)
         await callback.message.edit_text(LEXICON.UNEXPECTED_ERROR)
@@ -119,6 +158,5 @@ async def cancel_list_confirmed(callback: CallbackQuery, state: FSMContext):
 async def cancel_list_declined(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await state.clear()
     await callback.message.delete()
-    # ВИПРАВЛЕНО: Викликаємо оновлену функцію з правильним контекстом
     await _display_user_list(bot, callback.message.chat.id, callback.from_user.id)
     await callback.answer()

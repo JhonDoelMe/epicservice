@@ -1,27 +1,35 @@
+# epicservice/handlers/archive.py
+
 import logging
 
+# --- ЗМІНА: Додаємо F, CallbackQuery та SQLAlchemyError ---
 from aiogram import F, Router
-from aiogram.types import Message
+from aiogram.types import CallbackQuery
 from sqlalchemy.exc import SQLAlchemyError
 
 from database.orm import orm_get_user_lists_archive
+# --- ЗМІНА: Імпортуємо клавіатури, що нам знадобляться ---
 from keyboards.inline import get_archive_kb
 from lexicon.lexicon import LEXICON
+# --- ЗМІНА: Імпортуємо обробник повернення на головне меню ---
+from handlers.user.list_management import back_to_main_menu
+
 
 logger = logging.getLogger(__name__)
 
 router = Router()
 
-@router.message(F.text == LEXICON.BUTTON_ARCHIVE)
-async def show_archive_handler(message: Message):
+# --- ЗМІНА: Обробник тепер реагує на callback, а не на текст ---
+@router.callback_query(F.data == "main:archive")
+async def show_archive_handler(callback: CallbackQuery):
     """
     Обробник для кнопки '🗂️ Архів списків'.
 
     Дістає з бази даних усі збережені списки для поточного користувача,
-    форматує їх у вигляді нумерованого списку та надсилає користувачу
-    разом із кнопкою для завантаження всього архіву у форматі ZIP.
+    форматує їх у вигляді нумерованого списку та надсилає користувачу,
+    редагуючи повідомлення головного меню.
     """
-    user_id = message.from_user.id
+    user_id = callback.from_user.id
     
     try:
         logger.info("Користувач %s запитує свій архів.", user_id)
@@ -29,7 +37,8 @@ async def show_archive_handler(message: Message):
 
         # Якщо у користувача ще немає збережених списків
         if not archived_lists:
-            await message.answer(LEXICON.NO_ARCHIVED_LISTS)
+            # Просто показуємо сповіщення, не змінюючи головне меню
+            await callback.answer(LEXICON.NO_ARCHIVED_LISTS, show_alert=True)
             return
 
         # Формуємо текстове повідомлення зі списком архівів
@@ -44,12 +53,17 @@ async def show_archive_handler(message: Message):
                     created_date=created_date
                 )
             )
-
-        await message.answer("\n".join(response_text), reply_markup=get_archive_kb(user_id))
+        
+        # Редагуємо повідомлення головного меню, перетворюючи його на екран архіву
+        await callback.message.edit_text(
+            "\n".join(response_text), 
+            reply_markup=get_archive_kb(user_id)
+        )
+        await callback.answer()
         
     except SQLAlchemyError as e:
         logger.error("Помилка БД при отриманні архіву для %s: %s", user_id, e, exc_info=True)
-        await message.answer(LEXICON.UNEXPECTED_ERROR)
+        await callback.message.answer(LEXICON.UNEXPECTED_ERROR)
     except Exception as e:
         logger.error("Неочікувана помилка при перегляді архіву %s: %s", user_id, e, exc_info=True)
-        await message.answer(LEXICON.UNEXPECTED_ERROR)
+        await callback.message.answer(LEXICON.UNEXPECTED_ERROR)

@@ -18,31 +18,27 @@ logger = logging.getLogger(__name__)
 
 
 def format_quantity(quantity_str: str) -> Union[int, float, str]:
+    # ... (код без змін)
     try:
         quantity_float = float(str(quantity_str).replace(',', '.'))
         return int(quantity_float) if quantity_float.is_integer() else quantity_float
     except (ValueError, TypeError):
         return quantity_str
 
-
+# --- ЗМІНА: Функція тепер приймає `search_query` ---
 async def send_or_edit_product_card(
     bot: Bot,
     chat_id: int,
     user_id: int,
     product: Product,
-    message_id: int = None
+    message_id: int = None,
+    search_query: str | None = None # Додано новий аргумент
 ):
     """
     Формує та надсилає (або редагує) інформаційну картку товару.
-
-    Args:
-        bot: Екземпляр бота.
-        chat_id: ID чату для відправки/редагування.
-        user_id: ID користувача для розрахунку резервів.
-        product: Об'єкт Product.
-        message_id: ID повідомлення для редагування. Якщо None, надсилається нове.
     """
     try:
+        # ... (розрахунки кількості залишаються без змін) ...
         in_user_temp_list_qty = await orm_get_temp_list_item_quantity(user_id, product.id)
         total_temp_reserved = await orm_get_total_temp_reservation_for_product(product.id)
 
@@ -65,7 +61,13 @@ async def send_or_edit_product_card(
             available=escape_markdown(display_available),
             reserved=escape_markdown(display_user_reserved),
         )
-        keyboard = get_product_actions_kb(product.id, int_available_for_button)
+        
+        # --- ЗМІНА: Передаємо `search_query` у функцію створення клавіатури ---
+        keyboard = get_product_actions_kb(
+            product.id, 
+            int_available_for_button, 
+            search_query=search_query # Ось тут
+        )
 
         if message_id:
             try:

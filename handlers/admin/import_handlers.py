@@ -9,13 +9,16 @@ import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import (CallbackQuery, Message, 
+                           InlineKeyboardMarkup, InlineKeyboardButton)
 
+# --- ЗМІНА: Додаємо ADMIN_IDS ---
 from config import ADMIN_IDS
 from database.orm import (orm_get_all_users_sync,
                           orm_get_users_with_active_lists, orm_smart_import)
-from keyboards.inline import get_admin_lock_kb, get_notify_confirmation_kb
-from keyboards.reply import admin_main_kb, cancel_kb
+# --- ЗМІНА: Імпортуємо get_user_main_kb ---
+from keyboards.inline import (get_admin_lock_kb, get_notify_confirmation_kb,
+                              get_admin_panel_kb, get_user_main_kb)
 from lexicon.lexicon import LEXICON
 from utils.force_save_helper import force_save_user_list
 
@@ -28,20 +31,19 @@ router.message.filter(F.from_user.id.in_(ADMIN_IDS))
 router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 
 
-# Оновлюємо стани FSM
 class AdminImportStates(StatesGroup):
     waiting_for_import_file = State()
     lock_confirmation = State()
     notify_confirmation = State()
 
 
-# --- Допоміжні функції ---
-
 def _validate_excel_columns(df: pd.DataFrame) -> bool:
+    # ... (код без змін)
     required_columns = {"в", "г", "н", "к"}
     return required_columns.issubset(set(df.columns))
 
 def _validate_excel_data(df: pd.DataFrame) -> List[str]:
+    # ... (код без змін)
     errors = []
     for index, row in df.iterrows():
         if pd.notna(row["н"]) and not isinstance(row.get("в"), (int, float)):
@@ -52,6 +54,7 @@ def _validate_excel_data(df: pd.DataFrame) -> List[str]:
     return errors
 
 def _format_admin_report(result: dict) -> str:
+    # ... (код без змін)
     report_lines = [
         LEXICON.IMPORT_REPORT_TITLE,
         LEXICON.IMPORT_REPORT_ADDED.format(added=result['added']),
@@ -65,6 +68,7 @@ def _format_admin_report(result: dict) -> str:
         report_lines.append(LEXICON.IMPORT_REPORT_FAIL_CHECK.format(db_count=result['total_in_db'], file_count=result['total_in_file']))
     return "\n".join(report_lines)
 
+# --- ЗМІНА: Функція тепер додає клавіатуру до повідомлення ---
 async def broadcast_import_update(bot: Bot, result: dict):
     loop = asyncio.get_running_loop()
     try:
@@ -93,7 +97,10 @@ async def broadcast_import_update(bot: Bot, result: dict):
         sent_count = 0
         for user_id in user_ids:
             try:
-                await bot.send_message(user_id, message_text)
+                # Визначаємо, яку клавіатуру надіслати
+                kb = get_admin_main_kb() if user_id in ADMIN_IDS else get_user_main_kb()
+                
+                await bot.send_message(user_id, message_text, reply_markup=kb)
                 sent_count += 1
             except Exception as e:
                 logger.warning("Не вдалося надіслати сповіщення про імпорт користувачу %s: %s", user_id, e)
@@ -104,27 +111,27 @@ async def broadcast_import_update(bot: Bot, result: dict):
         logger.error("Критична помилка під час розсилки сповіщень про імпорт: %s", e, exc_info=True)
 
 
-# --- Основна логіка ---
-
-# ВИПРАВЛЕНО: Додано параметр is_after_force_save
 async def proceed_with_import(message: Message, state: FSMContext, is_after_force_save: bool = False):
-    """
-    Запускає процес імпорту після всіх перевірок.
-    """
-    # Якщо функція викликана не після примусового збереження, редагуємо повідомлення
-    if not is_after_force_save:
-        await message.edit_reply_markup(reply_markup=None)
+    # ... (код без змін)
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=LEXICON.BUTTON_BACK_TO_ADMIN_PANEL, 
+            callback_data="admin:main"
+        )
+    ]])
     
-    # Надсилаємо нове повідомлення із запитом
-    await message.answer(
-        LEXICON.IMPORT_PROMPT,
-        reply_markup=cancel_kb
-    )
+    text_to_send = LEXICON.IMPORT_PROMPT
+    if is_after_force_save:
+        await message.answer(text_to_send, reply_markup=back_kb)
+    else:
+        await message.edit_text(text_to_send, reply_markup=back_kb)
+        
     await state.set_state(AdminImportStates.waiting_for_import_file)
 
 
 @router.callback_query(F.data == "admin:import_products")
 async def start_import_handler(callback: CallbackQuery, state: FSMContext):
+    # ... (код без змін)
     active_users = await orm_get_users_with_active_lists()
     if not active_users:
         await proceed_with_import(callback.message, state)
@@ -142,6 +149,7 @@ async def start_import_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminImportStates.lock_confirmation, F.data.startswith("lock:notify:"))
 async def handle_lock_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    # ... (код без змін)
     data = await state.get_data()
     for user_id in data.get('locked_user_ids', []):
         try:
@@ -153,6 +161,7 @@ async def handle_lock_notify(callback: CallbackQuery, state: FSMContext, bot: Bo
 
 @router.callback_query(AdminImportStates.lock_confirmation, F.data.startswith("lock:force_save:"))
 async def handle_lock_force_save(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    # ... (код без змін)
     await callback.message.edit_text("Почав примусове збереження списків...")
     data = await state.get_data()
     user_ids, action = data.get('locked_user_ids', []), data.get('action_to_perform')
@@ -163,18 +172,20 @@ async def handle_lock_force_save(callback: CallbackQuery, state: FSMContext, bot
         return
     await callback.answer("Всі списки успішно збережено!", show_alert=True)
     if action == 'import':
-        # ВИПРАВЛЕНО: Передаємо прапорець, що ми вже відредагували повідомлення
         await proceed_with_import(callback.message, state, is_after_force_save=True)
 
 
 @router.message(AdminImportStates.waiting_for_import_file, F.document)
 async def process_import_file(message: Message, state: FSMContext, bot: Bot):
+    # ... (код без змін)
     if not message.document.file_name.endswith(".xlsx"):
         await message.answer(LEXICON.IMPORT_WRONG_FORMAT)
         return
+    
+    await bot.delete_message(message.chat.id, message.message_id - 1)
 
     await state.clear()
-    await message.answer(LEXICON.IMPORT_PROCESSING, reply_markup=admin_main_kb)
+    await message.answer(LEXICON.IMPORT_PROCESSING)
     temp_file_path = f"temp_import_{message.from_user.id}.xlsx"
 
     try:
@@ -215,6 +226,7 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(AdminImportStates.notify_confirmation, F.data == "notify_confirm:yes")
 async def handle_notify_yes(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    # ... (код без змін)
     await callback.message.edit_text(LEXICON.BROADCAST_STARTING)
     data = await state.get_data()
     result = data.get('import_result')
@@ -223,17 +235,23 @@ async def handle_notify_yes(callback: CallbackQuery, state: FSMContext, bot: Bot
     if result:
         asyncio.create_task(broadcast_import_update(bot, result))
     
+    # --- ЗМІНА: Повертаємо адміна до головного меню ---
+    await callback.message.answer(
+        LEXICON.ADMIN_PANEL_GREETING,
+        reply_markup=get_admin_panel_kb()
+    )
     await callback.answer()
 
 
 @router.callback_query(AdminImportStates.notify_confirmation, F.data == "notify_confirm:no")
 async def handle_notify_no(callback: CallbackQuery, state: FSMContext):
+    # ... (код без змін)
     await callback.message.edit_text(LEXICON.BROADCAST_SKIPPED)
     await state.clear()
+
+    # --- ЗМІНА: Повертаємо адміна до головного меню ---
+    await callback.message.answer(
+        LEXICON.ADMIN_PANEL_GREETING,
+        reply_markup=get_admin_panel_kb()
+    )
     await callback.answer()
-
-
-@router.message(AdminImportStates.waiting_for_import_file, F.text == "❌ Скасувати")
-async def cancel_import(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(LEXICON.IMPORT_CANCELLED, reply_markup=admin_main_kb)

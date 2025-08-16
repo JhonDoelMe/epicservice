@@ -197,7 +197,17 @@ async def orm_find_products(search_query: str) -> list[Product]:
         scored_products = []
         for product in candidates:
             article_score = fuzz.ratio(search_query, product.артикул) * 1.2
-            name_score = fuzz.token_set_ratio(search_query.lower(), product.назва.lower())
+            
+            # --- ПОКРАЩЕННЯ АЛГОРИТМУ ---
+            # 1. Рахуємо оцінку за набором слів (добре для "термо кружка")
+            token_score = fuzz.token_set_ratio(search_query.lower(), product.назва.lower())
+            # 2. Рахуємо оцінку за частковим збігом (добре для "термо")
+            partial_score = fuzz.partial_ratio(search_query.lower(), product.назва.lower())
+            
+            # 3. Беремо найкращу (максимальну) з двох оцінок для назви
+            name_score = max(token_score, partial_score)
+            # --- КІНЕЦЬ ПОКРАЩЕННЯ ---
+
             final_score = max(article_score, name_score)
             if final_score > 55:
                 scored_products.append((product, final_score))
