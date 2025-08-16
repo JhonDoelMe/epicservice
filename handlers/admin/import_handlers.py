@@ -9,16 +9,17 @@ import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (CallbackQuery, Message, 
+from aiogram.types import (CallbackQuery, Message,
                            InlineKeyboardMarkup, InlineKeyboardButton)
+from sqlalchemy.exc import SQLAlchemyError
 
-# --- ЗМІНА: Додаємо ADMIN_IDS ---
 from config import ADMIN_IDS
 from database.orm import (orm_get_all_users_sync,
                           orm_get_users_with_active_lists, orm_smart_import)
-# --- ЗМІНА: Імпортуємо get_user_main_kb ---
+from handlers.admin.core import _show_admin_panel
+# --- ВИПРАВЛЕНО: Додано get_admin_main_kb до імпортів ---
 from keyboards.inline import (get_admin_lock_kb, get_notify_confirmation_kb,
-                              get_admin_panel_kb, get_user_main_kb)
+                              get_admin_panel_kb, get_user_main_kb, get_admin_main_kb)
 from lexicon.lexicon import LEXICON
 from utils.force_save_helper import force_save_user_list
 
@@ -68,8 +69,8 @@ def _format_admin_report(result: dict) -> str:
         report_lines.append(LEXICON.IMPORT_REPORT_FAIL_CHECK.format(db_count=result['total_in_db'], file_count=result['total_in_file']))
     return "\n".join(report_lines)
 
-# --- ЗМІНА: Функція тепер додає клавіатуру до повідомлення ---
 async def broadcast_import_update(bot: Bot, result: dict):
+    # ... (код без змін)
     loop = asyncio.get_running_loop()
     try:
         user_ids = await loop.run_in_executor(None, orm_get_all_users_sync)
@@ -97,7 +98,7 @@ async def broadcast_import_update(bot: Bot, result: dict):
         sent_count = 0
         for user_id in user_ids:
             try:
-                # Визначаємо, яку клавіатуру надіслати
+                # Тепер цей рядок не буде викликати помилку
                 kb = get_admin_main_kb() if user_id in ADMIN_IDS else get_user_main_kb()
                 
                 await bot.send_message(user_id, message_text, reply_markup=kb)
@@ -183,8 +184,6 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
         return
     
     await bot.delete_message(message.chat.id, message.message_id - 1)
-
-    await state.clear()
     await message.answer(LEXICON.IMPORT_PROCESSING)
     temp_file_path = f"temp_import_{message.from_user.id}.xlsx"
 
@@ -203,7 +202,7 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
         await message.answer(LEXICON.IMPORT_STARTING)
         result = await orm_smart_import(df)
         if not result:
-            await message.answer(LEXICON.IMPORT_SYNC_ERROR.format(error="невідома помилка"))
+            await message.answer(LEXICON.IMPORT_SYNC_ERROR.format(error="невідома помилка."))
             return
         
         admin_report = _format_admin_report(result)
@@ -216,9 +215,14 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
         )
         await state.set_state(AdminImportStates.notify_confirmation)
 
+    except SQLAlchemyError as e:
+        logger.critical("Помилка БД під час імпорту: %s", e, exc_info=True)
+        await message.answer(LEXICON.IMPORT_SYNC_ERROR.format(error=str(e)))
+        await _show_admin_panel(message)
     except Exception as e:
         logger.error("Критична помилка при обробці файлу імпорту: %s", e, exc_info=True)
-        await message.answer(LEXICON.IMPORT_CRITICAL_READ_ERROR.format(error=e))
+        await message.answer(LEXICON.IMPORT_CRITICAL_READ_ERROR.format(error=str(e)))
+        await _show_admin_panel(message)
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
@@ -229,17 +233,12 @@ async def handle_notify_yes(callback: CallbackQuery, state: FSMContext, bot: Bot
     # ... (код без змін)
     await callback.message.edit_text(LEXICON.BROADCAST_STARTING)
     data = await state.get_data()
-    result = data.get('import_result')
     await state.clear()
     
-    if result:
+    if result := data.get('import_result'):
         asyncio.create_task(broadcast_import_update(bot, result))
     
-    # --- ЗМІНА: Повертаємо адміна до головного меню ---
-    await callback.message.answer(
-        LEXICON.ADMIN_PANEL_GREETING,
-        reply_markup=get_admin_panel_kb()
-    )
+    await _show_admin_panel(callback)
     await callback.answer()
 
 
@@ -248,10 +247,6 @@ async def handle_notify_no(callback: CallbackQuery, state: FSMContext):
     # ... (код без змін)
     await callback.message.edit_text(LEXICON.BROADCAST_SKIPPED)
     await state.clear()
-
-    # --- ЗМІНА: Повертаємо адміна до головного меню ---
-    await callback.message.answer(
-        LEXICON.ADMIN_PANEL_GREETING,
-        reply_markup=get_admin_panel_kb()
-    )
+    
+    await _show_admin_panel(callback)
     await callback.answer()

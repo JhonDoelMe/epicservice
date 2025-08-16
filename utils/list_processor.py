@@ -19,18 +19,24 @@ logger = logging.getLogger(__name__)
 async def _save_list_to_excel(
     items: List[Dict[str, Any]],
     user_id: int,
+    # --- ЗМІНА: Додаємо новий параметр для номера відділу ---
+    department_id: Optional[int],
     prefix: str = ""
 ) -> Optional[str]:
     """
     Зберігає список товарів у файл Excel.
-    (Ця функція перенесена з list_saving.py для централізації).
+    Тепер назва файлу включає номер відділу.
     """
     if not items:
         return None
     try:
         timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M")
-        # Використовуємо назву, що не залежить від вмісту, для універсальності
-        file_name = f"{prefix}list_{timestamp}.xlsx"
+        
+        # --- ЗМІНА: Формуємо назву файлу з номером відділу ---
+        # Якщо відділ не визначено, повертаємо стару назву "list"
+        base_name = department_id if department_id is not None else "list"
+        file_name = f"{prefix}{base_name}_{timestamp}.xlsx"
+        
         archive_dir = os.path.join(ARCHIVES_PATH, f"user_{user_id}")
         os.makedirs(archive_dir, exist_ok=True)
         file_path = os.path.join(archive_dir, file_name)
@@ -49,21 +55,13 @@ async def process_and_save_list(
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Централізована функція для обробки та збереження тимчасового списку.
-
-    Виконує всю бізнес-логіку: перевіряє залишки, оновлює резерви,
-    створює файли та зберігає дані в БД.
-
-    Args:
-        session: Активна асинхронна сесія SQLAlchemy.
-        user_id: ID користувача, чий список обробляється.
-
-    Returns:
-        Кортеж із двох елементів: (шлях_до_основного_файлу, шлях_до_файлу_лишків).
-        Якщо файл не було створено, відповідне значення буде None.
     """
     temp_list = await orm_get_temp_list(user_id)
     if not temp_list:
         return None, None
+
+    # --- ЗМІНА: Визначаємо номер відділу для назви файлу ---
+    department_id = temp_list[0].product.відділ
 
     in_stock_items, surplus_items, reservation_updates = [], [], []
 
@@ -78,8 +76,6 @@ async def process_and_save_list(
             stock_qty = 0
 
         available = stock_qty - (product.відкладено or 0)
-        
-        # Резервуємо повну кількість, яку хоче користувач
         reservation_updates.append({"product_id": product.id, "quantity": item.quantity})
 
         if item.quantity <= available:
@@ -89,20 +85,17 @@ async def process_and_save_list(
                 in_stock_items.append({"артикул": product.артикул, "кількість": available})
             surplus_items.append({"артикул": product.артикул, "кількість": item.quantity - available})
 
-    # Оновлюємо резерви в БД
     if reservation_updates:
         await orm_update_reserved_quantity(session, reservation_updates)
 
-    # Створюємо файли Excel
-    main_list_path = await _save_list_to_excel(in_stock_items, user_id)
-    surplus_list_path = await _save_list_to_excel(surplus_items, user_id, "лишки_")
+    # --- ЗМІНА: Передаємо номер відділу у функцію збереження файлів ---
+    main_list_path = await _save_list_to_excel(in_stock_items, user_id, department_id)
+    surplus_list_path = await _save_list_to_excel(surplus_items, user_id, department_id, "лишки_")
 
-    # Зберігаємо інформацію про основний список в архіві БД
     if main_list_path and in_stock_items:
         db_items = [{"article_name": p.product.назва, "quantity": p.quantity} for p in temp_list]
         await orm_add_saved_list(session, user_id, os.path.basename(main_list_path), main_list_path, db_items)
 
-    # Очищуємо тимчасовий список
     await orm_clear_temp_list(user_id)
 
     return main_list_path, surplus_list_path

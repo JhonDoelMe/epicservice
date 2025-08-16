@@ -6,8 +6,9 @@ from database.models import Product, TempList
 from lexicon.lexicon import LEXICON
 
 
+# ... (всі попередні функції get_user_main_kb, get_admin_main_kb і т.д. залишаються без змін) ...
+
 def get_user_main_kb() -> InlineKeyboardMarkup:
-    # ... (код без змін)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -30,7 +31,6 @@ def get_user_main_kb() -> InlineKeyboardMarkup:
     )
 
 def get_admin_main_kb() -> InlineKeyboardMarkup:
-    # ... (код без змін)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -59,7 +59,6 @@ def get_admin_main_kb() -> InlineKeyboardMarkup:
     )
 
 def get_admin_panel_kb() -> InlineKeyboardMarkup:
-    # ... (код без змін)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=LEXICON.BUTTON_IMPORT_PRODUCTS, callback_data="admin:import_products")],
@@ -73,7 +72,6 @@ def get_admin_panel_kb() -> InlineKeyboardMarkup:
     )
 
 def get_users_with_archives_kb(users: list) -> InlineKeyboardMarkup:
-    # ... (код без змін)
     keyboard = []
     for user_id, lists_count in users:
         button_text = LEXICON.BUTTON_USER_LIST_ITEM.format(
@@ -89,7 +87,6 @@ def get_users_with_archives_kb(users: list) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_archive_kb(user_id: int, is_admin_view: bool = False) -> InlineKeyboardMarkup:
-    # ... (код без змін)
     keyboard = [[
         InlineKeyboardButton(text=LEXICON.BUTTON_PACK_IN_ZIP, callback_data=f"download_zip:{user_id}")
     ]]
@@ -106,7 +103,6 @@ def get_archive_kb(user_id: int, is_admin_view: bool = False) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_search_results_kb(products: list[Product]) -> InlineKeyboardMarkup:
-    # ... (код без змін)
     keyboard = []
     for product in products:
         button_text = (product.назва[:60] + '..') if len(product.назва) > 62 else product.назва
@@ -116,16 +112,11 @@ def get_search_results_kb(products: list[Product]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def get_product_actions_kb(
-    product_id: int, 
-    available_quantity: int, 
+    product_id: int,
+    available_quantity: int,
     search_query: str | None = None
 ) -> InlineKeyboardMarkup:
-    """
-    Створює клавіатуру дій для картки товару.
-    """
     keyboard = []
-
-    # Рядок з основними діями
     action_buttons = []
     if available_quantity > 0:
         add_all_text = LEXICON.BUTTON_ADD_ALL.format(quantity=available_quantity)
@@ -137,17 +128,14 @@ def get_product_actions_kb(
     )
     keyboard.append(action_buttons)
     
-    # Рядок з навігацією
     navigation_buttons = []
     if search_query:
         navigation_buttons.append(
             InlineKeyboardButton(
-                text=LEXICON.BUTTON_BACK_TO_SEARCH, 
+                text=LEXICON.BUTTON_BACK_TO_SEARCH,
                 callback_data="back_to_results"
             )
         )
-    
-    # --- ЗМІНА: Додаємо кнопки "Мій список" та "На головну" ---
     navigation_buttons.append(
         InlineKeyboardButton(
             text=LEXICON.INLINE_BUTTON_MY_LIST,
@@ -161,12 +149,36 @@ def get_product_actions_kb(
         )
     )
     keyboard.append(navigation_buttons)
-    # --- КІНЕЦЬ ЗМІНИ ---
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+# --- НОВА ФУНКЦІЯ ---
+def get_quantity_kb(product_id: int) -> InlineKeyboardMarkup:
+    """
+    Створює клавіатуру для швидкого вибору кількості товару.
+    """
+    buttons = []
+    # Створюємо кнопки з цифрами від 1 до 5
+    quantity_buttons = [
+        InlineKeyboardButton(
+            text=str(i),
+            callback_data=f"add_quantity:{product_id}:{i}"
+        ) for i in range(1, 6)
+    ]
+    buttons.append(quantity_buttons)
+    
+    # Додаємо кнопку "Скасувати"
+    buttons.append([
+        InlineKeyboardButton(
+            text=LEXICON.BUTTON_CANCEL_INPUT,
+            callback_data=f"cancel_quantity_input:{product_id}"
+        )
+    ])
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def get_confirmation_kb(confirm_callback: str, cancel_callback: str) -> InlineKeyboardMarkup:
-    # ... (код без змін)
     return InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(text=LEXICON.BUTTON_CONFIRM_YES, callback_data=confirm_callback),
@@ -175,7 +187,6 @@ def get_confirmation_kb(confirm_callback: str, cancel_callback: str) -> InlineKe
     )
 
 def get_admin_lock_kb(action: str) -> InlineKeyboardMarkup:
-    # ... (код без змін)
     return InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
@@ -190,7 +201,6 @@ def get_admin_lock_kb(action: str) -> InlineKeyboardMarkup:
     )
 
 def get_notify_confirmation_kb() -> InlineKeyboardMarkup:
-    # ... (код без змін)
     return InlineKeyboardMarkup(
         inline_keyboard=[[
             InlineKeyboardButton(
@@ -205,7 +215,6 @@ def get_notify_confirmation_kb() -> InlineKeyboardMarkup:
     )
 
 def get_my_list_kb() -> InlineKeyboardMarkup:
-    # ... (код без змін)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -226,7 +235,6 @@ def get_my_list_kb() -> InlineKeyboardMarkup:
     )
 
 def get_list_for_editing_kb(temp_list: list[TempList]) -> InlineKeyboardMarkup:
-    # ... (код без змін)
     keyboard = []
     for item in temp_list:
         button_text = f"✏️ {item.product.артикул} ({item.quantity} шт.)"

@@ -7,9 +7,10 @@ from aiogram import Bot
 from aiogram.types import FSInputFile
 from sqlalchemy.exc import SQLAlchemyError
 
+from config import ADMIN_IDS
 from database.engine import async_session
+from keyboards.inline import get_admin_main_kb, get_user_main_kb
 from lexicon.lexicon import LEXICON
-# --- ЗМІНА: Імпортуємо наш новий централізований сервіс ---
 from utils.list_processor import process_and_save_list
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ async def force_save_user_list(user_id: int, bot: Bot) -> bool:
     Примусово зберігає тимчасовий список вказаного користувача.
 
     Використовує централізовану функцію process_and_save_list,
-    а потім надсилає згенеровані файли користувачу.
+    а потім надсилає згенеровані файли та головне меню користувачу.
 
     Args:
         user_id: ID користувача, чий список потрібно зберегти.
@@ -35,10 +36,9 @@ async def force_save_user_list(user_id: int, bot: Bot) -> bool:
     try:
         async with async_session() as session:
             async with session.begin():
-                # --- ЗМІНА: Вся логіка тепер в одній функції ---
                 main_list_path, surplus_list_path = await process_and_save_list(session, user_id)
 
-        # --- Надсилання файлів користувачу після успішної транзакції ---
+        # --- Надсилання файлів та меню користувачу ---
         if not main_list_path and not surplus_list_path:
             # Якщо список був порожній, нічого не надсилаємо, операція успішна
             return True
@@ -48,6 +48,12 @@ async def force_save_user_list(user_id: int, bot: Bot) -> bool:
         if surplus_list_path:
             await bot.send_document(user_id, FSInputFile(surplus_list_path), caption=LEXICON.SURPLUS_LIST_CAPTION)
         
+        # --- НОВИЙ БЛОК: Надсилаємо головне меню, щоб уникнути глухого кута ---
+        kb = get_admin_main_kb() if user_id in ADMIN_IDS else get_user_main_kb()
+        text = LEXICON.CMD_START_ADMIN if user_id in ADMIN_IDS else LEXICON.CMD_START_USER
+        await bot.send_message(user_id, text, reply_markup=kb)
+        # --- КІНЕЦЬ НОВОГО БЛОКУ ---
+
         return True
 
     except (SQLAlchemyError, ValueError) as e:
