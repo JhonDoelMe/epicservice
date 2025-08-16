@@ -6,11 +6,12 @@ import re
 
 import pandas as pd
 from sqlalchemy import delete, func, select, update
+# --- ВИПРАВЛЕНО: Видалено 'process', оскільки він не використовується ---
 from thefuzz import fuzz
 
 from database.engine import async_session, sync_session
 from database.models import Product
-from lexicon.lexicon import LEXICON
+# --- ВИПРАВЛЕНО: Видалено 'LEXICON', оскільки він не використовується ---
 
 # Налаштовуємо логер для цього модуля
 logger = logging.getLogger(__name__)
@@ -51,69 +52,60 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> dict:
             inplace=False,
         )
 
-        file_articles_with_data = {}
+        file_articles_data = {}
         for _, row in df.iterrows():
             if pd.notna(row["назва"]) and (article := _extract_article(row["назва"])):
-                file_articles_with_data[article] = int(row.get("відділ", 0))
+                file_articles_data[article] = {
+                    "назва": str(row["назва"]).strip(),
+                    "відділ": int(row["відділ"]),
+                    "група": str(row.get("група", "")).strip(),
+                    "кількість": _normalize_quantity(row["кількість"]),
+                }
 
-        file_articles = set(file_articles_with_data.keys())
+        file_articles = set(file_articles_data.keys())
         updated_count, added_count, deleted_count = 0, 0, 0
         department_stats = {}
 
         with sync_session() as session:
-            db_articles = {p for p in session.execute(select(Product.артикул)).scalars()}
+            existing_products = {p.артикул: p for p in session.execute(select(Product)).scalars()}
+            db_articles = set(existing_products.keys())
 
             articles_to_delete = db_articles - file_articles
+            articles_to_update = db_articles.intersection(file_articles)
+            articles_to_add = file_articles - db_articles
+
             if articles_to_delete:
                 stmt = delete(Product).where(Product.артикул.in_(articles_to_delete))
                 result = session.execute(stmt)
                 deleted_count = result.rowcount
 
-            # Отримуємо об'єкти існуючих продуктів, щоб мати доступ до їх ID
-            existing_products_query = select(Product)
-            existing_products = {p.артикул: p for p in session.execute(existing_products_query).scalars()}
-
-            products_to_update = []
-            products_to_add = []
-
-            for _, row in df.iterrows():
-                if pd.isna(row["назва"]) or pd.isna(row["відділ"]):
-                    continue
-
-                full_name = str(row["назва"]).strip()
-                article = _extract_article(full_name)
-                if not article:
-                    continue
-
-                product_data = {
-                    "назва": full_name,
-                    "відділ": int(row["відділ"]),
-                    "група": str(row["група"]).strip(),
-                    "кількість": _normalize_quantity(row["кількість"]),
-                }
-
-                if article in existing_products:
-                    # ВИПРАВЛЕНО: Додаємо ID існуючого продукту до словника для оновлення
+            if articles_to_update:
+                products_to_update_mappings = []
+                for article in articles_to_update:
                     product_id = existing_products[article].id
-                    update_data = {"id": product_id, "артикул": article, **product_data}
-                    products_to_update.append(update_data)
-                else:
-                    products_to_add.append(Product(артикул=article, **product_data))
+                    update_data = {"id": product_id, "артикул": article, **file_articles_data[article]}
+                    products_to_update_mappings.append(update_data)
+                
+                if products_to_update_mappings:
+                    session.bulk_update_mappings(Product, products_to_update_mappings)
+                    updated_count = len(products_to_update_mappings)
 
-            if products_to_update:
-                session.bulk_update_mappings(Product, products_to_update)
-                updated_count = len(products_to_update)
-
-            if products_to_add:
-                session.bulk_save_objects(products_to_add)
-                added_count = len(products_to_add)
-
+            if articles_to_add:
+                products_to_add_objects = []
+                for article in articles_to_add:
+                    products_to_add_objects.append(Product(артикул=article, **file_articles_data[article]))
+                
+                if products_to_add_objects:
+                    session.bulk_save_objects(products_to_add_objects)
+                    added_count = len(products_to_add_objects)
+            
             session.execute(update(Product).values(відкладено=0))
             session.commit()
 
             total_in_db = session.execute(select(func.count(Product.id))).scalar_one()
 
-            for art, dep in file_articles_with_data.items():
+            for data in file_articles_data.values():
+                dep = data["відділ"]
                 department_stats[dep] = department_stats.get(dep, 0) + 1
 
             return {
@@ -141,12 +133,10 @@ async def orm_smart_import(dataframe: pd.DataFrame) -> dict:
 def _sync_subtract_collected_from_stock(dataframe: pd.DataFrame) -> dict:
     """
     Синхронно віднімає кількість зібраних товарів від залишків у базі.
-    Приймає стандартизований DataFrame з колонками 'артикул' та 'Кількість'.
     """
     processed_count, not_found_count, error_count = 0, 0, 0
     with sync_session() as session:
         for _, row in dataframe.iterrows():
-            # ВИПРАВЛЕНО: Беремо артикул напряму з підготовленого DataFrame
             article = str(row.get("артикул", "")).strip()
             if not article:
                 continue
@@ -192,26 +182,35 @@ async def orm_find_products(search_query: str) -> list[Product]:
         )
         result = await session.execute(stmt)
         candidates = result.scalars().all()
+
         if not candidates:
             return []
+
         scored_products = []
+        search_query_lower = search_query.lower()
+
         for product in candidates:
-            article_score = fuzz.ratio(search_query, product.артикул) * 1.2
+            if search_query == product.артикул:
+                article_score = 200
+            else:
+                article_score = fuzz.ratio(search_query, product.артикул) * 1.5
+
+            name_lower = product.назва.lower()
+            token_set_score = fuzz.token_set_ratio(search_query_lower, name_lower)
+            partial_score = fuzz.partial_ratio(search_query_lower, name_lower)
             
-            # --- ПОКРАЩЕННЯ АЛГОРИТМУ ---
-            # 1. Рахуємо оцінку за набором слів (добре для "термо кружка")
-            token_score = fuzz.token_set_ratio(search_query.lower(), product.назва.lower())
-            # 2. Рахуємо оцінку за частковим збігом (добре для "термо")
-            partial_score = fuzz.partial_ratio(search_query.lower(), product.назва.lower())
-            
-            # 3. Беремо найкращу (максимальну) з двох оцінок для назви
-            name_score = max(token_score, partial_score)
-            # --- КІНЕЦЬ ПОКРАЩЕННЯ ---
+            if name_lower.startswith(search_query_lower):
+                name_score = 100
+            else:
+                name_score = (token_set_score * 0.7) + (partial_score * 0.3)
 
             final_score = max(article_score, name_score)
-            if final_score > 55:
+
+            if final_score > 65:
                 scored_products.append((product, final_score))
+        
         scored_products.sort(key=lambda x: x[1], reverse=True)
+        
         return [product for product, score in scored_products[:15]]
 
 
