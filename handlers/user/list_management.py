@@ -6,9 +6,10 @@ import asyncio
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-# --- ЗМІНА: Додаємо InlineKeyboardMarkup та InlineKeyboardButton ---
 from aiogram.types import (CallbackQuery, Message, 
                            InlineKeyboardMarkup, InlineKeyboardButton)
+# --- ЗМІНА: Імпортуємо виключення для обробки помилки ---
+from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ADMIN_IDS
@@ -26,13 +27,10 @@ class ListManagementStates(StatesGroup):
 
 
 async def _display_user_list(bot: Bot, chat_id: int, user_id: int):
-    """
-    Основна логіка для відображення поточного списку користувача.
-    """
+    # ... (код без змін)
     try:
         temp_list = await orm_get_temp_list(user_id)
         if not temp_list:
-            # --- ЗМІНА: Додаємо кнопку "На головну" для порожнього списку ---
             back_kb = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(
                     text=LEXICON.BUTTON_BACK_TO_MAIN_MENU,
@@ -40,7 +38,6 @@ async def _display_user_list(bot: Bot, chat_id: int, user_id: int):
                 )
             ]])
             await bot.send_message(chat_id, LEXICON.EMPTY_LIST, reply_markup=back_kb)
-            # --- КІНЕЦЬ ЗМІНИ ---
             return
 
         department_id = temp_list[0].product.відділ
@@ -69,38 +66,43 @@ async def _display_user_list(bot: Bot, chat_id: int, user_id: int):
 
 @router.callback_query(F.data == "main:back")
 async def back_to_main_menu(callback: CallbackQuery):
-    """
-    Повертає користувача на головний екран, редагуючи поточне повідомлення.
-    """
+    # ... (код без змін)
     user_id = callback.from_user.id
     kb = get_admin_main_kb() if user_id in ADMIN_IDS else get_user_main_kb()
     text = LEXICON.CMD_START_ADMIN if user_id in ADMIN_IDS else LEXICON.CMD_START_USER
     try:
         await callback.message.edit_text(text, reply_markup=kb)
-    except Exception: # Якщо повідомлення не можна редагувати, надсилаємо нове
+    except TelegramBadRequest:
+        await callback.message.delete()
         await callback.message.answer(text, reply_markup=kb)
-        await callback.message.delete() # і видаляємо старе
     finally:
         await callback.answer()
 
 
 @router.callback_query(F.data == "main:new_list")
 async def new_list_handler(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
-        LEXICON.NEW_LIST_CONFIRM,
-        reply_markup=get_confirmation_kb("confirm_new_list", "main:back"),
-    )
-    await state.set_state(ListManagementStates.confirm_new_list)
-    await callback.answer()
+    # --- ЗМІНА: Додаємо обробку помилки ---
+    try:
+        await callback.message.edit_text(
+            LEXICON.NEW_LIST_CONFIRM,
+            reply_markup=get_confirmation_kb("confirm_new_list", "main:back"),
+        )
+        await state.set_state(ListManagementStates.confirm_new_list)
+    except TelegramBadRequest as e:
+        logger.warning("Помилка редагування повідомлення при запиті нового списку: %s", e)
+        # Якщо повідомлення не знайдено, просто ігноруємо
+    finally:
+        await callback.answer()
+    # --- КІНЕЦЬ ЗМІНИ ---
 
 @router.callback_query(ListManagementStates.confirm_new_list, F.data == "confirm_new_list")
 async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
+    # ... (код без змін)
     user_id = callback.from_user.id
     await state.clear()
     try:
         await orm_clear_temp_list(user_id)
         
-        # --- ЗМІНА: Залишаємо користувача в режимі пошуку ---
         back_kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
                 text=LEXICON.BUTTON_BACK_TO_MAIN_MENU,
@@ -111,7 +113,6 @@ async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
             LEXICON.NEW_LIST_CONFIRMED, 
             reply_markup=back_kb
         )
-        # --- КІНЕЦЬ ЗМІНИ ---
 
     except SQLAlchemyError as e:
         logger.error("Помилка БД при очищенні тимчасового списку для %s: %s", user_id, e, exc_info=True)
@@ -121,13 +122,18 @@ async def new_list_confirmed(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "main:my_list")
 async def my_list_handler(callback: CallbackQuery, bot: Bot):
-    await callback.message.delete()
+    # ... (код без змін)
+    try:
+        await callback.message.delete()
+    except TelegramBadRequest as e:
+        logger.warning("Помилка видалення повідомлення при запиті 'Мій список': %s", e)
     await _display_user_list(bot, callback.message.chat.id, callback.from_user.id)
     await callback.answer()
 
 
 @router.callback_query(F.data == "cancel_list:confirm")
 async def cancel_list_confirm_handler(callback: CallbackQuery, state: FSMContext):
+    # ... (код без змін)
     await callback.message.edit_text(
         LEXICON.CANCEL_LIST_CONFIRM,
         reply_markup=get_confirmation_kb("cancel_list:yes", "cancel_list:no")
@@ -137,6 +143,7 @@ async def cancel_list_confirm_handler(callback: CallbackQuery, state: FSMContext
 
 @router.callback_query(ListManagementStates.confirm_cancel_list, F.data == "cancel_list:yes")
 async def cancel_list_confirmed(callback: CallbackQuery, state: FSMContext):
+    # ... (код без змін)
     user_id = callback.from_user.id
     await state.clear()
     try:
@@ -156,6 +163,7 @@ async def cancel_list_confirmed(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(ListManagementStates.confirm_cancel_list, F.data == "cancel_list:no")
 async def cancel_list_declined(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    # ... (код без змін)
     await state.clear()
     await callback.message.delete()
     await _display_user_list(bot, callback.message.chat.id, callback.from_user.id)
