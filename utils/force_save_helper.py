@@ -11,7 +11,6 @@ from database.engine import async_session
 from database.orm import (orm_add_saved_list, orm_clear_temp_list,
                           orm_get_product_by_id, orm_get_temp_list,
                           orm_update_reserved_quantity)
-# Ми імпортуємо цю функцію з її оригінального модуля
 from handlers.user.list_saving import _save_list_to_excel
 from lexicon.lexicon import LEXICON
 
@@ -54,16 +53,27 @@ async def force_save_user_list(user_id: int, bot: Bot) -> bool:
                     available = stock_qty - (product.відкладено or 0)
                     item_for_excel = {"артикул": product.артикул, "кількість": 0}
 
+                    # --- ВИПРАВЛЕННЯ ЛОГІКИ РЕЗЕРВУВАННЯ ---
+                    # Ми резервуємо повну кількість, яку хоче користувач,
+                    # щоб логіка відповідала user-side збереженню.
+                    reservation_updates.append({"product_id": product.id, "quantity": item.quantity})
+
                     if item.quantity <= available:
+                        # Якщо товару вистачає, він йде в основний файл
                         item_for_excel["кількість"] = item.quantity
                         in_stock_items.append(item_for_excel)
-                        reservation_updates.append({"product_id": product.id, "quantity": item.quantity})
                     else:
+                        # Якщо товару не вистачає
                         if available > 0:
+                            # Частина, що є, йде в основний файл
                             item_for_excel["кількість"] = available
                             in_stock_items.append(item_for_excel)
-                            reservation_updates.append({"product_id": product.id, "quantity": available})
-                        surplus_items.append({"артикул": product.артикул, "кількість": item.quantity - available})
+                        # Різниця йде у файл лишків
+                        surplus_items.append({
+                            "артикул": product.артикул, 
+                            "кількість": item.quantity - available
+                        })
+                    # --- КІНЕЦЬ ВИПРАВЛЕННЯ ---
 
                 if reservation_updates:
                     await orm_update_reserved_quantity(session, reservation_updates)
@@ -72,7 +82,6 @@ async def force_save_user_list(user_id: int, bot: Bot) -> bool:
 
                 if file_path and in_stock_items:
                     db_items = [{"article_name": p.product.назва, "quantity": p.quantity} for p in temp_list]
-                    # ВИПРАВЛЕНО: Змінено порядок аргументів у виклику функції
                     await orm_add_saved_list(session, user_id, os.path.basename(file_path), file_path, db_items)
 
                 await orm_clear_temp_list(user_id)
