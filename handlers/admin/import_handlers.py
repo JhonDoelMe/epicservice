@@ -9,17 +9,17 @@ import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (CallbackQuery, Message,
-                           InlineKeyboardMarkup, InlineKeyboardButton)
+from aiogram.types import (CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ADMIN_IDS
-from database.orm import (orm_get_all_users_sync,
+from database.orm import (orm_get_all_products_sync, orm_get_all_users_sync,
                           orm_get_users_with_active_lists, orm_smart_import)
 from handlers.admin.core import _show_admin_panel
-# --- ВИПРАВЛЕНО: Додано get_admin_main_kb до імпортів ---
-from keyboards.inline import (get_admin_lock_kb, get_notify_confirmation_kb,
-                              get_admin_panel_kb, get_user_main_kb, get_admin_main_kb)
+from keyboards.inline import (get_admin_lock_kb, get_admin_main_kb,
+                              get_admin_panel_kb, get_notify_confirmation_kb,
+                              get_user_main_kb)
 from lexicon.lexicon import LEXICON
 from utils.force_save_helper import force_save_user_list
 
@@ -38,39 +38,51 @@ class AdminImportStates(StatesGroup):
     notify_confirmation = State()
 
 
-def _validate_excel_columns(df: pd.DataFrame) -> bool:
-    # ... (код без змін)
+def _validate_excel_columns(df: pd.DataFrame) -> tuple[bool, str]:
+    df_columns_lower = {str(col).lower() for col in df.columns}
     required_columns = {"в", "г", "н", "к"}
-    return required_columns.issubset(set(df.columns))
+    
+    if not required_columns.issubset(df_columns_lower):
+        missing_columns = required_columns - df_columns_lower
+        return False, ", ".join(missing_columns)
+    return True, ""
+
 
 def _validate_excel_data(df: pd.DataFrame) -> List[str]:
-    # ... (код без змін)
     errors = []
-    for index, row in df.iterrows():
-        if pd.notna(row["н"]) and not isinstance(row.get("в"), (int, float)):
-            errors.append(f"Рядок {index + 2}: 'відділ' має бути числом, а не '{row.get('в')}'")
+    df_copy = df.copy()
+    df_copy.rename(columns={"в": "відділ", "н": "назва"}, inplace=True)
+
+    for index, row in df_copy.iterrows():
+        if pd.notna(row["назва"]) and not isinstance(row.get("відділ"), (int, float)):
+            errors.append(f"Рядок {index + 2}: 'відділ' має бути числом, а не '{row.get('відділ')}'")
         if len(errors) >= 10:
             errors.append("... та інші помилки.")
             break
     return errors
 
+
 def _format_admin_report(result: dict) -> str:
-    # ... (код без змін)
     report_lines = [
         LEXICON.IMPORT_REPORT_TITLE,
-        LEXICON.IMPORT_REPORT_ADDED.format(added=result['added']),
-        LEXICON.IMPORT_REPORT_UPDATED.format(updated=result['updated']),
-        LEXICON.IMPORT_REPORT_DELETED.format(deleted=result['deleted']),
-        LEXICON.IMPORT_REPORT_TOTAL.format(total=result['total_in_db']),
+        LEXICON.IMPORT_REPORT_ADDED.format(added=result.get('added', 0)),
+        LEXICON.IMPORT_REPORT_UPDATED.format(updated=result.get('updated', 0)),
+        LEXICON.IMPORT_REPORT_DEACTIVATED.format(deactivated=result.get('deactivated', 0)),
+        LEXICON.IMPORT_REPORT_REACTIVATED.format(reactivated=result.get('reactivated', 0)),
+        LEXICON.IMPORT_REPORT_TOTAL.format(total=result.get('total_in_db', 0)),
     ]
-    if result['total_in_db'] == result['total_in_file']:
-        report_lines.append(LEXICON.IMPORT_REPORT_SUCCESS_CHECK.format(count=result['total_in_file']))
+    if result.get('total_in_db') == result.get('total_in_file'):
+        report_lines.append(LEXICON.IMPORT_REPORT_SUCCESS_CHECK.format(count=result.get('total_in_file', 0)))
     else:
-        report_lines.append(LEXICON.IMPORT_REPORT_FAIL_CHECK.format(db_count=result['total_in_db'], file_count=result['total_in_file']))
+        report_lines.append(LEXICON.IMPORT_REPORT_FAIL_CHECK.format(
+            db_count=result.get('total_in_db', 0),
+            file_count=result.get('total_in_file', 0)
+        ))
     return "\n".join(report_lines)
 
+
 async def broadcast_import_update(bot: Bot, result: dict):
-    # ... (код без змін)
+    """Розсилає сповіщення про оновлення бази, включаючи загальну суму."""
     loop = asyncio.get_running_loop()
     try:
         user_ids = await loop.run_in_executor(None, orm_get_all_users_sync)
@@ -78,8 +90,19 @@ async def broadcast_import_update(bot: Bot, result: dict):
             logger.info("Користувачі для розсилки сповіщень про імпорт не знайдені.")
             return
 
-        stats_part = LEXICON.USER_IMPORT_NOTIFICATION_STATS.format(
-            added=result['added'], updated=result['updated'], deleted=result['deleted']
+        # --- НОВИЙ БЛОК: Отримуємо всі товари для розрахунку суми ---
+        all_products = await loop.run_in_executor(None, orm_get_all_products_sync)
+        total_sum = sum(p.сума_залишку for p in all_products if p.сума_залишку)
+        # --- КІНЕЦЬ НОВОГО БЛОКУ ---
+
+        summary_part = LEXICON.USER_IMPORT_NOTIFICATION_SUMMARY.format(
+            total_in_db=result.get('total_in_db', 0),
+            total_sum=f"{total_sum:,.2f}".replace(",", " ")
+        )
+        details_part = LEXICON.USER_IMPORT_NOTIFICATION_DETAILS.format(
+            added=result.get('added', 0),
+            updated=result.get('updated', 0),
+            deactivated=result.get('deactivated', 0)
         )
         departments_part = LEXICON.USER_IMPORT_NOTIFICATION_DEPARTMENTS_TITLE
         dep_stats = result.get('department_stats', {})
@@ -91,16 +114,14 @@ async def broadcast_import_update(bot: Bot, result: dict):
         ]
         
         message_text = (
-            LEXICON.USER_IMPORT_NOTIFICATION_TITLE + stats_part + "\n" +
-            departments_part + "\n".join(departments_lines)
+            LEXICON.USER_IMPORT_NOTIFICATION_TITLE + summary_part + "\n" +
+            details_part + "\n" + departments_part + "\n".join(departments_lines)
         )
 
         sent_count = 0
         for user_id in user_ids:
             try:
-                # Тепер цей рядок не буде викликати помилку
                 kb = get_admin_main_kb() if user_id in ADMIN_IDS else get_user_main_kb()
-                
                 await bot.send_message(user_id, message_text, reply_markup=kb)
                 sent_count += 1
             except Exception as e:
@@ -113,7 +134,6 @@ async def broadcast_import_update(bot: Bot, result: dict):
 
 
 async def proceed_with_import(message: Message, state: FSMContext, is_after_force_save: bool = False):
-    # ... (код без змін)
     back_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text=LEXICON.BUTTON_BACK_TO_ADMIN_PANEL, 
@@ -132,7 +152,6 @@ async def proceed_with_import(message: Message, state: FSMContext, is_after_forc
 
 @router.callback_query(F.data == "admin:import_products")
 async def start_import_handler(callback: CallbackQuery, state: FSMContext):
-    # ... (код без змін)
     active_users = await orm_get_users_with_active_lists()
     if not active_users:
         await proceed_with_import(callback.message, state)
@@ -150,7 +169,6 @@ async def start_import_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminImportStates.lock_confirmation, F.data.startswith("lock:notify:"))
 async def handle_lock_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    # ... (код без змін)
     data = await state.get_data()
     for user_id in data.get('locked_user_ids', []):
         try:
@@ -162,7 +180,6 @@ async def handle_lock_notify(callback: CallbackQuery, state: FSMContext, bot: Bo
 
 @router.callback_query(AdminImportStates.lock_confirmation, F.data.startswith("lock:force_save:"))
 async def handle_lock_force_save(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    # ... (код без змін)
     await callback.message.edit_text("Почав примусове збереження списків...")
     data = await state.get_data()
     user_ids, action = data.get('locked_user_ids', []), data.get('action_to_perform')
@@ -178,8 +195,7 @@ async def handle_lock_force_save(callback: CallbackQuery, state: FSMContext, bot
 
 @router.message(AdminImportStates.waiting_for_import_file, F.document)
 async def process_import_file(message: Message, state: FSMContext, bot: Bot):
-    # ... (код без змін)
-    if not message.document.file_name.endswith(".xlsx"):
+    if not message.document.file_name.endswith((".xlsx", ".xls")):
         await message.answer(LEXICON.IMPORT_WRONG_FORMAT)
         return
     
@@ -189,11 +205,13 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
 
     try:
         await bot.download(message.document, destination=temp_file_path)
-        df = await asyncio.to_thread(pd.read_excel, temp_file_path)
+        df = await asyncio.to_thread(pd.read_excel, temp_file_path, engine='openpyxl')
 
-        if not _validate_excel_columns(df):
-            await message.answer(LEXICON.IMPORT_INVALID_COLUMNS.format(columns=", ".join(df.columns)))
+        is_valid, missing_cols = _validate_excel_columns(df)
+        if not is_valid:
+            await message.answer(LEXICON.IMPORT_INVALID_COLUMNS.format(columns=missing_cols))
             return
+
         errors = _validate_excel_data(df)
         if errors:
             await message.answer(LEXICON.IMPORT_VALIDATION_ERRORS_TITLE + "\n".join(errors))
@@ -230,7 +248,6 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(AdminImportStates.notify_confirmation, F.data == "notify_confirm:yes")
 async def handle_notify_yes(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    # ... (код без змін)
     await callback.message.edit_text(LEXICON.BROADCAST_STARTING)
     data = await state.get_data()
     await state.clear()
@@ -244,7 +261,6 @@ async def handle_notify_yes(callback: CallbackQuery, state: FSMContext, bot: Bot
 
 @router.callback_query(AdminImportStates.notify_confirmation, F.data == "notify_confirm:no")
 async def handle_notify_no(callback: CallbackQuery, state: FSMContext):
-    # ... (код без змін)
     await callback.message.edit_text(LEXICON.BROADCAST_SKIPPED)
     await state.clear()
     

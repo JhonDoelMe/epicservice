@@ -2,7 +2,8 @@
 
 from typing import List
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import (BigInteger, Boolean, DateTime, Float, ForeignKey, Integer,
+                        String, func)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -11,18 +12,15 @@ class Base(DeclarativeBase):
     pass
 
 
-# НОВА МОДЕЛЬ для зберігання всіх користувачів
 class User(Base):
     """Модель, що представляє користувача бота."""
     __tablename__ = 'users'
 
-    # Telegram ID буде первинним ключем
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     username: Mapped[str] = mapped_column(String(100), nullable=True)
     first_name: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[DateTime] = mapped_column(DateTime, default=func.now())
 
-    # Зв'язки з іншими таблицями
     saved_lists: Mapped[List["SavedList"]] = relationship(back_populates="user")
     temp_list_items: Mapped[List["TempList"]] = relationship(back_populates="user")
 
@@ -37,13 +35,22 @@ class Product(Base):
     група: Mapped[str] = mapped_column(String(100))
     кількість: Mapped[str] = mapped_column(String(50))
     відкладено: Mapped[int] = mapped_column(Integer, default=0)
+    
+    # --- ОНОВЛЕНІ ТА НОВІ ПОЛЯ (УКРАЇНСЬКОЮ) ---
+    # "м" - місяців без руху
+    місяці_без_руху: Mapped[int] = mapped_column(Integer, nullable=True, default=0)
+    # "с" - сума залишку
+    сума_залишку: Mapped[float] = mapped_column(Float, nullable=True, default=0.0)
+    # "ц" - ціна за одиницю
+    ціна: Mapped[float] = mapped_column(Float, nullable=True, default=0.0)
+    # Статус активності товару
+    активний: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 
 class SavedList(Base):
     """Модель, що представляє збережений список товарів користувача."""
     __tablename__ = 'saved_lists'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # ОНОВЛЕНО: Додано ForeignKey для зв'язку з таблицею users
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
     file_name: Mapped[str] = mapped_column(String(100))
     file_path: Mapped[str] = mapped_column(String(255))
@@ -68,7 +75,6 @@ class TempList(Base):
     """Модель, що представляє тимчасовий (поточний) список товарів користувача."""
     __tablename__ = 'temp_lists'
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    # ОНОВЛЕНО: Додано ForeignKey для зв'язку з таблицею users
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
     product_id: Mapped[int] = mapped_column(ForeignKey('products.id'))
     quantity: Mapped[int] = mapped_column(Integer)

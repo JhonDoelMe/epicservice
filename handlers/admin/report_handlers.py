@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -10,9 +11,8 @@ import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (CallbackQuery, FSInputFile, Message,
-                           InlineKeyboardMarkup, InlineKeyboardButton)
-# --- ЗМІНА: Додаємо SQLAlchemyError ---
+from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ADMIN_IDS, ARCHIVES_PATH
@@ -41,23 +41,34 @@ class AdminReportStates(StatesGroup):
 
 
 def _create_stock_report_sync() -> Optional[str]:
-    # ... (код без змін) ...
     try:
         products = orm_get_all_products_sync()
         temp_list_items = orm_get_all_temp_list_items_sync()
-        temp_reservations = {item.product_id: temp_reservations.get(item.product_id, 0) + item.quantity for item in temp_list_items}
+        
+        temp_reservations = {}
+        for item in temp_list_items:
+            temp_reservations[item.product_id] = temp_reservations.get(item.product_id, 0) + item.quantity
+
         report_data = []
         for product in products:
             try:
-                stock_qty = float(product.кількість)
+                stock_qty = float(str(product.кількість).replace(',', '.'))
             except (ValueError, TypeError):
                 stock_qty = 0
+            
             reserved = (product.відкладено or 0) + temp_reservations.get(product.id, 0)
             available = stock_qty - reserved
+            
+            available_sum = available * (product.ціна or 0.0)
+
             report_data.append({
-                "Відділ": product.відділ, "Група": product.група, "Назва": product.назва,
-                "Залишок": int(available) if available.is_integer() else available,
+                "Відділ": product.відділ,
+                "Група": product.група,
+                "Назва": product.назва,
+                "Залишок (кількість)": int(available) if available == int(available) else available,
+                "Сума залишку (грн)": round(available_sum, 2)
             })
+            
         df = pd.DataFrame(report_data)
         os.makedirs(ARCHIVES_PATH, exist_ok=True)
         report_path = os.path.join(ARCHIVES_PATH, f"stock_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
@@ -68,42 +79,43 @@ def _create_stock_report_sync() -> Optional[str]:
         return None
 
 
-# --- ОНОВЛЕНО: Посилено валідацію файлу ---
 def _parse_and_validate_subtract_file(df: pd.DataFrame) -> Optional[pd.DataFrame]:
     """
-    Перевіряє структуру та дані файлу для віднімання залишків.
-    Тепер також валідує, що кількість є числовим типом.
+    Універсальний парсер для файлів на віднімання.
+    Розпізнає різні формати та витягує з них артикул та кількість.
     """
-    full_report_columns = {"Відділ", "Група", "Назва", "Кількість"}
-    simple_report_columns = {"артикул", "кількість"} # Для файлів з 2 колонок
+    try:
+        # 1. Спроба розпізнати повний звіт (з заголовками)
+        df_columns_lower = {str(c).lower() for c in df.columns}
+        if {"назва", "кількість"}.issubset(df_columns_lower):
+            df.rename(columns={col: str(col).lower() for col in df.columns}, inplace=True)
+            df_prepared = df[['назва', 'кількість']].copy()
+            df_prepared['артикул'] = df_prepared['назва'].astype(str).str.extract(r'(\d{8,})')
+            df_prepared = df_prepared.dropna(subset=['артикул'])
+            if pd.to_numeric(df_prepared['кількість'], errors='coerce').notna().all():
+                return df_prepared[['артикул', 'кількість']]
 
-    # Спроба розпізнати повний звіт
-    if full_report_columns.issubset(set(df.columns)):
-        df_standardized = df[['Назва', 'Кількість']].copy()
-        df_standardized['артикул'] = df_standardized['Назва'].astype(str).str.extract(r'^(\d{8,})')
-        df_standardized = df_standardized.dropna(subset=['артикул'])
-        # Перевірка типу даних
-        if not pd.to_numeric(df_standardized['Кількість'], errors='coerce').notna().all():
-            return None # Є нечислові значення
-        return df_standardized[['артикул', 'Кількість']]
-
-    # Спроба розпізнати простий звіт з 2 колонок
-    if len(df.columns) == 2:
-        df_simple = df.copy()
-        # Приводимо до єдиного регістру для надійності
-        df_simple.columns = [str(col).lower() for col in df_simple.columns]
-        if simple_report_columns.issubset(set(df_simple.columns)):
-            df_simple = df_simple.rename(columns={"кількість": "Кількість"})
-            # Перевірка формату артикула та типу даних
-            if df_simple['артикул'].astype(str).str.match(r'^\d{8,}$').all() and \
-               pd.to_numeric(df_simple['Кількість'], errors='coerce').notna().all():
-                return df_simple[['артикул', 'Кількість']]
+        # 2. Спроба розпізнати простий двоколонковий файл (без заголовків)
+        # У цьому випадку Pandas прочитає перший рядок даних як заголовок
+        if len(df.columns) == 2:
+            # Створюємо DataFrame з першого рядка (який Pandas вважає заголовком)
+            header_as_data = pd.DataFrame([df.columns.values], columns=['артикул', 'кількість'])
+            # Перейменовуємо колонки основного DataFrame
+            df.columns = ['артикул', 'кількість']
+            # Об'єднуємо все разом
+            df_simple = pd.concat([header_as_data, df], ignore_index=True)
+            
+            # Перевіряємо, чи всі дані є числовими
+            if pd.to_numeric(df_simple['артикул'], errors='coerce').notna().all() and \
+               pd.to_numeric(df_simple['кількість'], errors='coerce').notna().all():
+                return df_simple[['артикул', 'кількість']]
+    except Exception as e:
+        logger.error(f"Помилка парсингу файлу для віднімання: {e}")
 
     return None
 
 
 async def proceed_with_stock_export(callback: CallbackQuery, bot: Bot):
-    # ... (код без змін) ...
     await callback.answer(LEXICON.EXPORTING_STOCK)
     loop = asyncio.get_running_loop()
     report_path = await loop.run_in_executor(None, _create_stock_report_sync)
@@ -112,14 +124,17 @@ async def proceed_with_stock_export(callback: CallbackQuery, bot: Bot):
         await callback.message.answer(LEXICON.STOCK_REPORT_ERROR)
     else:
         try:
-            await bot.send_document(chat_id=callback.from_user.id, document=FSInputFile(report_path), caption=LEXICON.STOCK_REPORT_CAPTION)
+            await bot.send_document(
+                chat_id=callback.from_user.id,
+                document=FSInputFile(report_path),
+                caption=LEXICON.STOCK_REPORT_CAPTION
+            )
         finally:
             if os.path.exists(report_path): os.remove(report_path)
     await _show_admin_panel(callback.message)
 
 
 async def proceed_with_collected_export(callback: CallbackQuery, bot: Bot):
-    # ... (код без змін) ...
     await callback.answer(LEXICON.COLLECTED_REPORT_PROCESSING)
     loop = asyncio.get_running_loop()
     try:
@@ -129,11 +144,18 @@ async def proceed_with_collected_export(callback: CallbackQuery, bot: Bot):
             await callback.answer(LEXICON.COLLECTED_REPORT_EMPTY, show_alert=True)
         else:
             df = pd.DataFrame(collected_items)
-            df.rename(columns={"department": "Відділ", "group": "Група", "name": "Назва", "quantity": "Кількість"}, inplace=True)
+            df.rename(
+                columns={"department": "Відділ", "group": "Група", "name": "Назва", "quantity": "Кількість"},
+                inplace=True
+            )
             os.makedirs(ARCHIVES_PATH, exist_ok=True)
             report_path = os.path.join(ARCHIVES_PATH, f"collected_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
             df.to_excel(report_path, index=False)
-            await bot.send_document(chat_id=callback.from_user.id, document=FSInputFile(report_path), caption=LEXICON.COLLECTED_REPORT_CAPTION)
+            await bot.send_document(
+                chat_id=callback.from_user.id,
+                document=FSInputFile(report_path),
+                caption=LEXICON.COLLECTED_REPORT_CAPTION
+            )
             os.remove(report_path)
         await _show_admin_panel(callback.message)
     except Exception as e:
@@ -141,7 +163,6 @@ async def proceed_with_collected_export(callback: CallbackQuery, bot: Bot):
         await callback.message.answer(LEXICON.UNEXPECTED_ERROR)
 
 
-# ... (обробники export_stock_handler, export_collected_handler, handle_report_lock_notify, handle_report_lock_force_save залишаються без змін) ...
 @router.callback_query(F.data == "admin:export_stock")
 async def export_stock_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
     active_users = await orm_get_users_with_active_lists()
@@ -153,6 +174,7 @@ async def export_stock_handler(callback: CallbackQuery, state: FSMContext, bot: 
     await state.set_state(AdminReportStates.lock_confirmation)
     await callback.message.edit_text(LEXICON.ACTIVE_LISTS_BLOCK.format(users_info=users_info), reply_markup=get_admin_lock_kb('export_stock'))
     await callback.answer("Дію заблоковано", show_alert=True)
+
 
 @router.callback_query(F.data == "admin:export_collected")
 async def export_collected_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -166,6 +188,7 @@ async def export_collected_handler(callback: CallbackQuery, state: FSMContext, b
     await callback.message.edit_text(LEXICON.ACTIVE_LISTS_BLOCK.format(users_info=users_info), reply_markup=get_admin_lock_kb('export_collected'))
     await callback.answer("Дію заблоковано", show_alert=True)
 
+
 @router.callback_query(AdminReportStates.lock_confirmation, F.data.startswith("lock:notify:"))
 async def handle_report_lock_notify(callback: CallbackQuery, state: FSMContext, bot: Bot):
     data = await state.get_data()
@@ -175,6 +198,7 @@ async def handle_report_lock_notify(callback: CallbackQuery, state: FSMContext, 
         except Exception as e:
             logger.warning("Не вдалося надіслати сповіщення користувачу %s: %s", user_id, e)
     await callback.answer(LEXICON.NOTIFICATIONS_SENT, show_alert=True)
+
 
 @router.callback_query(AdminReportStates.lock_confirmation, F.data.startswith("lock:force_save:"))
 async def handle_report_lock_force_save(callback: CallbackQuery, state: FSMContext, bot: Bot):
@@ -217,9 +241,9 @@ async def process_subtract_file(message: Message, state: FSMContext, bot: Bot):
     try:
         await bot.download(message.document, destination=temp_file_path)
         
+        # --- ВИПРАВЛЕННЯ: Читаємо файл з заголовками за замовчуванням ---
         df = await asyncio.to_thread(pd.read_excel, temp_file_path)
         
-        # --- ОНОВЛЕНО: Використовуємо нову функцію валідації ---
         standardized_df = _parse_and_validate_subtract_file(df)
         
         if standardized_df is None:
@@ -243,5 +267,4 @@ async def process_subtract_file(message: Message, state: FSMContext, bot: Bot):
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
-        # Повертаємо адміна до головного меню в будь-якому випадку
         await _show_admin_panel(message)

@@ -15,11 +15,12 @@ from handlers import (archive, common, error_handler, user_search)
 from handlers.admin import (archive_handlers as admin_archive,
                             core as admin_core,
                             import_handlers as admin_import,
-                            report_handlers as admin_reports) # <-- ЗМІНА ТУТ
+                            report_handlers as admin_reports)
 from handlers.user import (item_addition, list_editing, list_management,
                            list_saving)
 from middlewares.logging_middleware import LoggingMiddleware
-from scheduler import setup_scheduler
+# --- ВИДАЛЕНО: Імпорт планувальника ---
+# from scheduler import setup_scheduler
 
 
 async def set_main_menu(bot: Bot):
@@ -71,9 +72,11 @@ async def main():
 
     dp.update.middleware(LoggingMiddleware())
 
-    scheduler = setup_scheduler(bot)
-    scheduler.start()
-    logger.info("Сервіс планувальника завдань успішно запущено.")
+    # --- ВИДАЛЕНО: Блок коду, що стосується планувальника ---
+    # scheduler = setup_scheduler(bot)
+    # scheduler.start()
+    # logger.info("Сервіс планувальника завдань успішно запущено.")
+    # --- КІНЕЦЬ ВИДАЛЕНОГО БЛОКУ ---
 
     # --- Реєстрація роутерів ---
     dp.include_router(error_handler.router)
@@ -81,7 +84,6 @@ async def main():
     dp.include_router(admin_import.router)
     dp.include_router(admin_reports.router)
     dp.include_router(admin_archive.router)
-    # dp.include_router(admin_status.router)  # <-- ВИДАЛЕНО ЦЕЙ РЯДОК
     dp.include_router(common.router)
     dp.include_router(archive.router)
     dp.include_router(list_management.router)
@@ -101,9 +103,10 @@ async def main():
         logger.critical("Критична помилка під час роботи бота: %s", e, exc_info=True)
     finally:
         logger.info("Завершення роботи бота...")
-        if scheduler.running:
-            scheduler.shutdown()
-            logger.info("Планувальник завдань зупинено.")
+        # --- ВИДАЛЕНО: Зупинка планувальника ---
+        # if 'scheduler' in locals() and scheduler.running:
+        #     scheduler.shutdown()
+        #     logger.info("Планувальник завдань зупинено.")
         await bot.session.close()
         logger.info("Сесія бота закрита.")
 
