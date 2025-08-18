@@ -32,24 +32,36 @@ async def _add_item_logic(user_id: int, product_id: int, quantity: int, bot: Bot
         async with async_session() as session:
             product = await orm_get_product_by_id(session, product_id)
             if not product:
-                await callback.answer(LEXICON.PRODUCT_NOT_FOUND, show_alert=True)
+                if callback.id != "fake_callback": # Перевіряємо, чи callback справжній
+                    await callback.answer(LEXICON.PRODUCT_NOT_FOUND, show_alert=True)
                 return
 
             allowed_department = await orm_get_temp_list_department(user_id)
             if allowed_department is not None and product.відділ != allowed_department:
-                await callback.answer(LEXICON.DEPARTMENT_MISMATCH.format(department=allowed_department), show_alert=True)
+                error_msg = LEXICON.DEPARTMENT_MISMATCH.format(department=allowed_department)
+                if callback.id == "fake_callback":
+                    # Для ручного вводу краще надіслати повідомлення, а не спливаюче вікно
+                    await bot.send_message(callback.message.chat.id, error_msg)
+                else:
+                    await callback.answer(error_msg, show_alert=True)
                 return
 
             await orm_add_item_to_temp_list(user_id, product_id, quantity)
             logger.info("Користувач %s додав товар ID %s (кількість: %s) до списку.", user_id, product_id, quantity)
 
-            await callback.answer(f"✅ Додано {quantity} шт.")
-
+            # --- ВИПРАВЛЕННЯ: Відповідаємо на callback, тільки якщо він справжній ---
+            if callback.id != "fake_callback":
+                await callback.answer(f"✅ Додано {quantity} шт.")
+            
+            # Оновлюємо картку товару в будь-якому випадку
             await send_or_edit_product_card(bot, callback.message.chat.id, user_id, product, callback.message.message_id)
 
     except Exception as e:
         logger.error("Неочікувана помилка додавання товару для %s: %s", user_id, e, exc_info=True)
-        await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
+        if callback.id != "fake_callback":
+            await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
+        else:
+            await bot.send_message(callback.message.chat.id, LEXICON.UNEXPECTED_ERROR)
 
 
 @router.callback_query(F.data.startswith("add_all:"))
@@ -165,20 +177,27 @@ async def process_manual_quantity(message: Message, state: FSMContext, bot: Bot)
     original_message_id = state_data.get("message_id")
     await state.clear()
     
+    # Видаляємо повідомлення користувача з числом
+    await message.delete()
+    
     try:
         quantity = int(message.text)
         
+        # --- ВИПРАВЛЕННЯ: Створюємо "фейковий" callback, але правильно ---
+        # Він потрібен, щоб передати ID чату та повідомлення в _add_item_logic
+        # для подальшого редагування картки товару.
         fake_callback = CallbackQuery(
-            id="fake_callback", from_user=message.from_user,
-            message=await bot.send_message(message.chat.id, "Обробка..."),
+            id="fake_callback",
+            from_user=message.from_user,
+            message=Message(
+                message_id=original_message_id,
+                chat=message.chat,
+                date=message.date
+            ),
             chat_instance=""
         )
         
-        await message.delete()
-        await bot.delete_message(message.chat.id, original_message_id)
-        
         await _add_item_logic(user_id, product_id, quantity, bot, fake_callback)
-        await bot.delete_message(fake_callback.message.chat.id, fake_callback.message.message_id)
 
     except Exception as e:
         logger.error("Помилка обробки ручного вводу кількості: %s", e, exc_info=True)
