@@ -9,6 +9,8 @@ import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+# --- ЗМІНА: Імпортуємо StorageKey ---
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import (CallbackQuery, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 from sqlalchemy.exc import SQLAlchemyError
@@ -18,8 +20,7 @@ from database.orm import (orm_get_all_products_sync, orm_get_all_users_sync,
                           orm_get_users_with_active_lists, orm_smart_import)
 from handlers.admin.core import _show_admin_panel
 from keyboards.inline import (get_admin_lock_kb, get_admin_main_kb,
-                              get_admin_panel_kb, get_notify_confirmation_kb,
-                              get_user_main_kb)
+                              get_notify_confirmation_kb, get_user_main_kb)
 from lexicon.lexicon import LEXICON
 from utils.force_save_helper import force_save_user_list
 
@@ -82,7 +83,6 @@ def _format_admin_report(result: dict) -> str:
 
 
 async def broadcast_import_update(bot: Bot, result: dict):
-    """Розсилає сповіщення про оновлення бази, включаючи загальну суму."""
     loop = asyncio.get_running_loop()
     try:
         user_ids = await loop.run_in_executor(None, orm_get_all_users_sync)
@@ -90,10 +90,8 @@ async def broadcast_import_update(bot: Bot, result: dict):
             logger.info("Користувачі для розсилки сповіщень про імпорт не знайдені.")
             return
 
-        # --- НОВИЙ БЛОК: Отримуємо всі товари для розрахунку суми ---
         all_products = await loop.run_in_executor(None, orm_get_all_products_sync)
         total_sum = sum(p.сума_залишку for p in all_products if p.сума_залишку)
-        # --- КІНЕЦЬ НОВОГО БЛОКУ ---
 
         summary_part = LEXICON.USER_IMPORT_NOTIFICATION_SUMMARY.format(
             total_in_db=result.get('total_in_db', 0),
@@ -133,7 +131,7 @@ async def broadcast_import_update(bot: Bot, result: dict):
         logger.error("Критична помилка під час розсилки сповіщень про імпорт: %s", e, exc_info=True)
 
 
-async def proceed_with_import(message: Message, state: FSMContext, is_after_force_save: bool = False):
+async def proceed_with_import(message: Message, state: FSMContext, bot: Bot, is_after_force_save: bool = False):
     back_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
             text=LEXICON.BUTTON_BACK_TO_ADMIN_PANEL, 
@@ -143,18 +141,21 @@ async def proceed_with_import(message: Message, state: FSMContext, is_after_forc
     
     text_to_send = LEXICON.IMPORT_PROMPT
     if is_after_force_save:
-        await message.answer(text_to_send, reply_markup=back_kb)
+        await message.edit_text("Списки збережено. Тепер, будь ласка, надішліть файл.")
+        sent_message = await message.answer(text_to_send, reply_markup=back_kb)
+        await state.update_data(main_message_id=sent_message.message_id)
     else:
         await message.edit_text(text_to_send, reply_markup=back_kb)
+        await state.update_data(main_message_id=message.message_id)
         
     await state.set_state(AdminImportStates.waiting_for_import_file)
 
 
 @router.callback_query(F.data == "admin:import_products")
-async def start_import_handler(callback: CallbackQuery, state: FSMContext):
+async def start_import_handler(callback: CallbackQuery, state: FSMContext, bot: Bot):
     active_users = await orm_get_users_with_active_lists()
     if not active_users:
-        await proceed_with_import(callback.message, state)
+        await proceed_with_import(callback.message, state, bot)
         await callback.answer()
         return
     users_info = "\n".join([f"- Користувач `{user_id}` (позицій: {count})" for user_id, count in active_users])
@@ -183,14 +184,23 @@ async def handle_lock_force_save(callback: CallbackQuery, state: FSMContext, bot
     await callback.message.edit_text("Почав примусове збереження списків...")
     data = await state.get_data()
     user_ids, action = data.get('locked_user_ids', []), data.get('action_to_perform')
-    all_saved_successfully = all([await force_save_user_list(user_id, bot) for user_id in user_ids])
+    
+    # --- ВИПРАВЛЕНО: Створюємо коректний FSMContext для кожного користувача ---
+    results = []
+    for user_id in user_ids:
+        user_state_key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
+        user_state = FSMContext(storage=state.storage, key=user_state_key)
+        results.append(await force_save_user_list(user_id, bot, user_state))
+        
+    all_saved_successfully = all(results)
+
     if not all_saved_successfully:
         await callback.message.edit_text("Під час примусового збереження виникли помилки. Спробуйте пізніше.")
-        await state.clear()
+        await state.set_state(None)
         return
     await callback.answer("Всі списки успішно збережено!", show_alert=True)
     if action == 'import':
-        await proceed_with_import(callback.message, state, is_after_force_save=True)
+        await proceed_with_import(callback.message, state, bot, is_after_force_save=True)
 
 
 @router.message(AdminImportStates.waiting_for_import_file, F.document)
@@ -199,7 +209,9 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
         await message.answer(LEXICON.IMPORT_WRONG_FORMAT)
         return
     
-    await bot.delete_message(message.chat.id, message.message_id - 1)
+    data = await state.get_data()
+    await bot.delete_message(message.chat.id, data.get("main_message_id"))
+    
     await message.answer(LEXICON.IMPORT_PROCESSING)
     temp_file_path = f"temp_import_{message.from_user.id}.xlsx"
 
@@ -227,20 +239,21 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
         await message.answer(admin_report)
         
         await state.update_data(import_result=result)
-        await message.answer(
+        sent_message = await message.answer(
             LEXICON.IMPORT_ASK_FOR_NOTIFICATION,
             reply_markup=get_notify_confirmation_kb()
         )
         await state.set_state(AdminImportStates.notify_confirmation)
+        await state.update_data(main_message_id=sent_message.message_id)
 
     except SQLAlchemyError as e:
         logger.critical("Помилка БД під час імпорту: %s", e, exc_info=True)
         await message.answer(LEXICON.IMPORT_SYNC_ERROR.format(error=str(e)))
-        await _show_admin_panel(message)
+        await _show_admin_panel(message, state, bot)
     except Exception as e:
         logger.error("Критична помилка при обробці файлу імпорту: %s", e, exc_info=True)
         await message.answer(LEXICON.IMPORT_CRITICAL_READ_ERROR.format(error=str(e)))
-        await _show_admin_panel(message)
+        await _show_admin_panel(message, state, bot)
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
@@ -250,19 +263,19 @@ async def process_import_file(message: Message, state: FSMContext, bot: Bot):
 async def handle_notify_yes(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.message.edit_text(LEXICON.BROADCAST_STARTING)
     data = await state.get_data()
-    await state.clear()
+    await state.set_state(None)
     
     if result := data.get('import_result'):
         asyncio.create_task(broadcast_import_update(bot, result))
     
-    await _show_admin_panel(callback)
+    await _show_admin_panel(callback, state, bot)
     await callback.answer()
 
 
 @router.callback_query(AdminImportStates.notify_confirmation, F.data == "notify_confirm:no")
-async def handle_notify_no(callback: CallbackQuery, state: FSMContext):
+async def handle_notify_no(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.message.edit_text(LEXICON.BROADCAST_SKIPPED)
-    await state.clear()
+    await state.set_state(None)
     
-    await _show_admin_panel(callback)
+    await _show_admin_panel(callback, state, bot)
     await callback.answer()

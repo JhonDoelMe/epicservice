@@ -6,8 +6,6 @@ from database.models import Product, TempList
 from lexicon.lexicon import LEXICON
 
 
-# ... (всі попередні функції get_user_main_kb, get_admin_main_kb і т.д. залишаються без змін) ...
-
 def get_user_main_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -124,7 +122,7 @@ def get_product_actions_kb(
             InlineKeyboardButton(text=add_all_text, callback_data=f"add_all:{product_id}:{available_quantity}")
         )
     action_buttons.append(
-        InlineKeyboardButton(text=LEXICON.BUTTON_ADD_CUSTOM, callback_data=f"add_custom:{product_id}")
+        InlineKeyboardButton(text=LEXICON.BUTTON_ADD_CUSTOM, callback_data=f"select_quantity:{product_id}")
     )
     keyboard.append(action_buttons)
     
@@ -152,29 +150,41 @@ def get_product_actions_kb(
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-# --- НОВА ФУНКЦІЯ ---
-def get_quantity_kb(product_id: int) -> InlineKeyboardMarkup:
+
+def get_quantity_selector_kb(product_id: int, current_qty: int, max_qty: int) -> InlineKeyboardMarkup:
     """
-    Створює клавіатуру для швидкого вибору кількості товару.
+    Створює інтерактивну клавіатуру для вибору кількості товару.
+    Центральна кнопка тепер є і індикатором, і кнопкою підтвердження.
     """
-    buttons = []
-    # Створюємо кнопки з цифрами від 1 до 5
-    quantity_buttons = [
-        InlineKeyboardButton(
-            text=str(i),
-            callback_data=f"add_quantity:{product_id}:{i}"
-        ) for i in range(1, 6)
+    current_qty = max(1, current_qty)
+
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="➖",
+                callback_data=f"qty_update:{product_id}:minus:{current_qty}:{max_qty}"
+            ),
+            # --- ЗМІНА: Центральна кнопка тепер підтверджує додавання ---
+            InlineKeyboardButton(
+                text=f"✅ Додати {current_qty} шт.",
+                callback_data=f"add_confirm:{product_id}:{current_qty}"
+            ),
+            InlineKeyboardButton(
+                text="➕",
+                callback_data=f"qty_update:{product_id}:plus:{current_qty}:{max_qty}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📝 Ввести число",
+                callback_data=f"qty_manual_input:{product_id}"
+            ),
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=f"product:{product_id}"
+            )
+        ]
     ]
-    buttons.append(quantity_buttons)
-    
-    # Додаємо кнопку "Скасувати"
-    buttons.append([
-        InlineKeyboardButton(
-            text=LEXICON.BUTTON_CANCEL_INPUT,
-            callback_data=f"cancel_quantity_input:{product_id}"
-        )
-    ])
-    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

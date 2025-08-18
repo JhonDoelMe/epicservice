@@ -2,34 +2,50 @@
 
 import logging
 
-from aiogram import Router
+from aiogram import Bot, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from config import ADMIN_IDS
-# Імпортуємо нову функцію для роботи з користувачами
 from database.orm import orm_upsert_user
-# --- ЗМІНА: Імпортуємо нові inline-клавіатури ---
 from keyboards.inline import get_admin_main_kb, get_user_main_kb
-# --- ВИДАЛЕНО: Старі reply-клавіатури ---
-# from keyboards.reply import admin_main_kb, user_main_kb
 from lexicon.lexicon import LEXICON
 
 logger = logging.getLogger(__name__)
 
 router = Router()
 
+
+async def clean_previous_keyboard(state: FSMContext, bot: Bot, chat_id: int):
+    """
+    Допоміжна функція для видалення клавіатури з попереднього головного повідомлення.
+    """
+    data = await state.get_data()
+    previous_message_id = data.get("main_message_id")
+    if previous_message_id:
+        try:
+            # --- ВИПРАВЛЕННЯ: Використовуємо іменовані аргументи ---
+            await bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=previous_message_id,
+                reply_markup=None
+            )
+        except TelegramBadRequest as e:
+            logger.info("Не вдалося видалити клавіатуру з попереднього повідомлення: %s", e)
+
+
 @router.message(CommandStart())
-async def cmd_start(message: Message):
+async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     """
     Обробник команди /start.
-
-    Зберігає або оновлює інформацію про користувача в базі даних,
-    а потім надсилає відповідне вітальне повідомлення та клавіатуру.
+    Тепер він видаляє клавіатуру з попереднього меню та зберігає ID нового.
     """
     user = message.from_user
     try:
-        # ВИПРАВЛЕНО: Додано збереження користувача в БД при кожному /start
+        await clean_previous_keyboard(state, bot, message.chat.id)
+
         await orm_upsert_user(
             user_id=user.id,
             username=user.username,
@@ -38,19 +54,15 @@ async def cmd_start(message: Message):
         logger.info("Обробка команди /start для користувача %s.", user.id)
         
         if user.id in ADMIN_IDS:
-            # --- ЗМІНА: Використовуємо нову inline-клавіатуру для адміна ---
-            await message.answer(
-                LEXICON.CMD_START_ADMIN,
-                reply_markup=get_admin_main_kb()
-            )
-            logger.info("Надано адмін-інтерфейс для %s.", user.id)
+            text = LEXICON.CMD_START_ADMIN
+            kb = get_admin_main_kb()
         else:
-            # --- ЗМІНА: Використовуємо нову inline-клавіатуру для користувача ---
-            await message.answer(
-                LEXICON.CMD_START_USER,
-                reply_markup=get_user_main_kb()
-            )
-            logger.info("Надано звичайний інтерфейс для %s.", user.id)
+            text = LEXICON.CMD_START_USER
+            kb = get_user_main_kb()
+
+        sent_message = await message.answer(text, reply_markup=kb)
+        
+        await state.update_data(main_message_id=sent_message.message_id)
             
     except Exception as e:
         logger.error("Неочікувана помилка в cmd_start для %s: %s", user.id, e, exc_info=True)

@@ -5,6 +5,7 @@ from typing import Union
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import Message
 
 from database.models import Product
 from database.orm import (orm_get_temp_list_item_quantity,
@@ -36,10 +37,10 @@ async def send_or_edit_product_card(
     product: Product,
     message_id: int = None,
     search_query: str | None = None
-):
+) -> Message | None:
     """
-    Формує та надсилає (або редагує) інформаційну картку товару.
-    Тепер включає динамічний розрахунок сум та оновлений формат.
+    Формує та надсилає (або редагує) картку товару.
+    Тепер повертає об'єкт надісланого або відредагованого повідомлення.
     """
     try:
         in_user_temp_list_qty = await orm_get_temp_list_item_quantity(user_id, product.id)
@@ -57,7 +58,6 @@ async def send_or_edit_product_card(
 
             price = product.ціна or 0.0
             
-            # --- ОНОВЛЕНА ЛОГІКА: Динамічний розрахунок суми залишку ---
             current_stock_sum = available_for_anyone_qty * price
             reserved_sum = in_user_temp_list_qty * price
             
@@ -90,9 +90,10 @@ async def send_or_edit_product_card(
             search_query=search_query
         )
 
+        sent_message = None
         if message_id:
             try:
-                await bot.edit_message_text(
+                sent_message = await bot.edit_message_text(
                     text=card_text,
                     chat_id=chat_id,
                     message_id=message_id,
@@ -102,8 +103,11 @@ async def send_or_edit_product_card(
                 if "message is not modified" not in str(e):
                     raise
         else:
-            await bot.send_message(chat_id, card_text, reply_markup=keyboard)
+            sent_message = await bot.send_message(chat_id, card_text, reply_markup=keyboard)
+        
+        return sent_message
 
     except Exception as e:
         logger.error("Помилка відправки/редагування картки товару %s для %s: %s", product.id, user_id, e, exc_info=True)
         await bot.send_message(chat_id, LEXICON.UNEXPECTED_ERROR)
+        return None

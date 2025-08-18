@@ -1,39 +1,34 @@
 # epicservice/handlers/user/item_addition.py
 
 import logging
-import asyncio
 
 from aiogram import Bot, F, Router
-from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
-# --- ОСЬ ВАЖЛИВИЙ РЯДОК ---
-from aiogram.types import (CallbackQuery, Message, InlineKeyboardButton,
-                           InlineKeyboardMarkup)
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, Message
 
 from database.engine import async_session
 from database.orm import (orm_add_item_to_temp_list, orm_get_product_by_id,
-                          orm_get_temp_list_department)
+                          orm_get_temp_list_department,
+                          orm_get_total_temp_reservation_for_product)
+from keyboards.inline import get_quantity_selector_kb
 from lexicon.lexicon import LEXICON
 from utils.card_generator import send_or_edit_product_card
-from keyboards.inline import get_quantity_kb
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-# --- ЗМІНА: Видаляємо клас FSM, він більше не потрібен ---
-# class ItemAdditionStates(StatesGroup):
-#     waiting_for_quantity = State()
+
+class ItemAdditionStates(StatesGroup):
+    waiting_for_manual_quantity = State()
 
 
-async def _add_item_logic(callback: CallbackQuery, bot: Bot, quantity: int):
+async def _add_item_logic(user_id: int, product_id: int, quantity: int, bot: Bot, callback: CallbackQuery):
     """
-    Допоміжна функція, що інкапсулює логіку додавання товару в список.
+    Уніфікована логіка додавання товару до списку.
     """
-    user_id = callback.from_user.id
     try:
-        # product_id береться з callback.data
-        product_id = int(callback.data.split(":")[1])
-
         async with async_session() as session:
             product = await orm_get_product_by_id(session, product_id)
             if not product:
@@ -50,7 +45,6 @@ async def _add_item_logic(callback: CallbackQuery, bot: Bot, quantity: int):
 
             await callback.answer(f"✅ Додано {quantity} шт.")
 
-            # Оновлюємо картку товару, щоб показати актуальні залишки
             await send_or_edit_product_card(bot, callback.message.chat.id, user_id, product, callback.message.message_id)
 
     except Exception as e:
@@ -61,72 +55,131 @@ async def _add_item_logic(callback: CallbackQuery, bot: Bot, quantity: int):
 @router.callback_query(F.data.startswith("add_all:"))
 async def add_all_callback(callback: CallbackQuery, bot: Bot):
     """Обробляє натискання на кнопку 'Додати все'."""
-    quantity = int(callback.data.split(":")[2])
-    await _add_item_logic(callback, bot, quantity)
-
-
-# --- НОВИЙ ОБРОБНИК для кнопок з цифрами ---
-@router.callback_query(F.data.startswith("add_quantity:"))
-async def add_quantity_callback(callback: CallbackQuery, bot: Bot):
-    """Обробляє натискання на кнопки швидкого вибору кількості (1-5)."""
-    quantity = int(callback.data.split(":")[2])
-    await _add_item_logic(callback, bot, quantity)
-
-
-@router.callback_query(F.data.startswith("add_custom:"))
-async def add_custom_callback(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """
-    Обробляє натискання на кнопку 'Інша кількість'.
-    Тепер показує клавіатуру з цифрами.
-    """
+    user_id = callback.from_user.id
     try:
-        product_id = int(callback.data.split(":", 1)[1])
+        _, product_id_str, quantity_str = callback.data.split(":")
+        product_id, quantity = int(product_id_str), int(quantity_str)
+        await _add_item_logic(user_id, product_id, quantity, bot, callback)
+    except (ValueError, IndexError) as e:
+        logger.error("Помилка обробки callback 'add_all': %s", callback.data, exc_info=True)
+        await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
+
+
+@router.callback_query(F.data.startswith("select_quantity:"))
+async def show_quantity_selector(callback: CallbackQuery, bot: Bot):
+    """Показує екран вибору кількості з лічильником."""
+    try:
+        product_id = int(callback.data.split(":")[1])
+        user_id = callback.from_user.id
+        
         async with async_session() as session:
             product = await orm_get_product_by_id(session, product_id)
             if not product:
                 await callback.answer(LEXICON.PRODUCT_NOT_FOUND, show_alert=True)
                 return
-
-        # Отримуємо пошуковий запит, щоб зберегти кнопку "Назад до результатів"
-        fsm_data = await state.get_data()
         
-        # Редагуємо повідомлення, змінюючи клавіатуру на вибір кількості
-        await bot.edit_message_text(
-            text=callback.message.text, # Текст картки залишаємо без змін
+        total_temp_reserved = await orm_get_total_temp_reservation_for_product(product.id)
+        stock_quantity = float(str(product.кількість).replace(',', '.'))
+        permanently_reserved = product.відкладено or 0
+        max_qty = int(stock_quantity - permanently_reserved - total_temp_reserved)
+
+        await bot.edit_message_reply_markup(
             chat_id=callback.message.chat.id,
             message_id=callback.message.message_id,
-            reply_markup=get_quantity_kb(product_id), # Ось наша нова клавіатура
+            reply_markup=get_quantity_selector_kb(product_id, 1, max_qty)
         )
-        await callback.answer("Оберіть потрібну кількість")
+        await callback.answer()
 
-    except Exception as e:
-        logger.error("Помилка при виклику меню вибору кількості: %s", e, exc_info=True)
+    except (ValueError, IndexError, Exception) as e:
+        logger.error("Помилка показу селектора кількості: %s", e, exc_info=True)
         await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
 
 
-@router.callback_query(F.data.startswith("cancel_quantity_input:"))
-async def cancel_quantity_input(callback: CallbackQuery, bot: Bot, state: FSMContext):
-    """
-    Обробляє скасування вибору кількості та повертає початкову картку товару.
-    """
-    product_id = int(callback.data.split(":", 1)[1])
-    fsm_data = await state.get_data()
+@router.callback_query(F.data.startswith("qty_update:"))
+async def update_quantity_selector(callback: CallbackQuery, bot: Bot):
+    """Обробляє натискання на [+] та [-] і оновлює клавіатуру."""
+    try:
+        _, product_id_str, action, current_qty_str, max_qty_str = callback.data.split(":")
+        product_id, current_qty, max_qty = int(product_id_str), int(current_qty_str), int(max_qty_str)
+
+        if action == "plus":
+            new_qty = min(current_qty + 1, max_qty)
+        elif action == "minus":
+            new_qty = max(current_qty - 1, 1)
+        else:
+            new_qty = current_qty
+
+        if new_qty == current_qty:
+            await callback.answer()
+            return
+
+        await bot.edit_message_reply_markup(
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            reply_markup=get_quantity_selector_kb(product_id, new_qty, max_qty)
+        )
+        await callback.answer()
+
+    except (ValueError, IndexError, TelegramBadRequest) as e:
+        logger.warning("Помилка оновлення лічильника: %s", e)
+        await callback.answer()
+
+
+@router.callback_query(F.data.startswith("add_confirm:"))
+async def confirm_add_callback(callback: CallbackQuery, bot: Bot):
+    """Обробляє натискання на центральну кнопку підтвердження."""
+    user_id = callback.from_user.id
+    try:
+        _, product_id_str, quantity_str = callback.data.split(":")
+        product_id, quantity = int(product_id_str), int(quantity_str)
+        await _add_item_logic(user_id, product_id, quantity, bot, callback)
+    except (ValueError, IndexError) as e:
+        logger.error("Помилка обробки callback 'add_confirm': %s", callback.data, exc_info=True)
+        await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
+
+
+@router.callback_query(F.data.startswith("qty_manual_input:"))
+async def manual_input_callback(callback: CallbackQuery, state: FSMContext):
+    """Запитує у користувача кількість для ручного вводу."""
+    try:
+        product_id = int(callback.data.split(":")[1])
+        await state.set_state(ItemAdditionStates.waiting_for_manual_quantity)
+        await state.update_data(product_id=product_id, message_id=callback.message.message_id)
+        
+        await callback.message.edit_text(
+            f"{callback.message.text}\n\n*Введіть потрібну кількість та надішліть повідомлення.*",
+            reply_markup=None
+        )
+        await callback.answer("Чекаю на ваше повідомлення...")
+    except (ValueError, IndexError) as e:
+        logger.error("Помилка обробки callback 'qty_manual_input': %s", e, exc_info=True)
+        await callback.answer(LEXICON.UNEXPECTED_ERROR, show_alert=True)
+
+
+@router.message(ItemAdditionStates.waiting_for_manual_quantity, F.text.isdigit())
+async def process_manual_quantity(message: Message, state: FSMContext, bot: Bot):
+    """Обробляє кількість, введену вручну."""
+    user_id = message.from_user.id
+    state_data = await state.get_data()
+    product_id = state_data.get("product_id")
+    original_message_id = state_data.get("message_id")
+    await state.clear()
     
-    async with async_session() as session:
-        product = await orm_get_product_by_id(session, product_id)
-        if product:
-            await send_or_edit_product_card(
-                bot,
-                chat_id=callback.message.chat.id,
-                user_id=callback.from_user.id,
-                product=product,
-                message_id=callback.message.message_id,
-                search_query=fsm_data.get('last_query')
-            )
-    await callback.answer("Скасовано")
+    try:
+        quantity = int(message.text)
+        
+        fake_callback = CallbackQuery(
+            id="fake_callback", from_user=message.from_user,
+            message=await bot.send_message(message.chat.id, "Обробка..."),
+            chat_instance=""
+        )
+        
+        await message.delete()
+        await bot.delete_message(message.chat.id, original_message_id)
+        
+        await _add_item_logic(user_id, product_id, quantity, bot, fake_callback)
+        await bot.delete_message(fake_callback.message.chat.id, fake_callback.message.message_id)
 
-
-# --- ВИДАЛЕНО: Обробник process_quantity більше не потрібен ---
-# @router.message(ItemAdditionStates.waiting_for_quantity, F.text.isdigit())
-# async def process_quantity(message: Message, state: FSMContext, bot: Bot):
-#     ...
+    except Exception as e:
+        logger.error("Помилка обробки ручного вводу кількості: %s", e, exc_info=True)
+        await message.answer(LEXICON.UNEXPECTED_ERROR)

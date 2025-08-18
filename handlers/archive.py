@@ -2,32 +2,27 @@
 
 import logging
 
-# --- ЗМІНА: Додаємо F, CallbackQuery та SQLAlchemyError ---
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 from sqlalchemy.exc import SQLAlchemyError
 
 from database.orm import orm_get_user_lists_archive
-# --- ЗМІНА: Імпортуємо клавіатури, що нам знадобляться ---
+# --- ЗМІНА: Імпортуємо потрібні хелпери ---
+from handlers.user.list_management import back_to_main_menu
 from keyboards.inline import get_archive_kb
 from lexicon.lexicon import LEXICON
-# --- ЗМІНА: Імпортуємо обробник повернення на головне меню ---
-from handlers.user.list_management import back_to_main_menu
-
 
 logger = logging.getLogger(__name__)
 
 router = Router()
 
-# --- ЗМІНА: Обробник тепер реагує на callback, а не на текст ---
+
 @router.callback_query(F.data == "main:archive")
-async def show_archive_handler(callback: CallbackQuery):
+async def show_archive_handler(callback: CallbackQuery, state: FSMContext):
     """
     Обробник для кнопки '🗂️ Архів списків'.
-
-    Дістає з бази даних усі збережені списки для поточного користувача,
-    форматує їх у вигляді нумерованого списку та надсилає користувачу,
-    редагуючи повідомлення головного меню.
+    Тепер коректно редагує повідомлення та оновлює стан.
     """
     user_id = callback.from_user.id
     
@@ -35,16 +30,12 @@ async def show_archive_handler(callback: CallbackQuery):
         logger.info("Користувач %s запитує свій архів.", user_id)
         archived_lists = await orm_get_user_lists_archive(user_id)
 
-        # Якщо у користувача ще немає збережених списків
         if not archived_lists:
-            # Просто показуємо сповіщення, не змінюючи головне меню
             await callback.answer(LEXICON.NO_ARCHIVED_LISTS, show_alert=True)
             return
 
-        # Формуємо текстове повідомлення зі списком архівів
         response_text = [LEXICON.ARCHIVE_TITLE]
         for i, lst in enumerate(archived_lists, 1):
-            # Форматуємо дату для кращого вигляду
             created_date = lst.created_at.strftime("%d.%m.%Y о %H:%M")
             response_text.append(
                 LEXICON.ARCHIVE_ITEM.format(
@@ -54,11 +45,12 @@ async def show_archive_handler(callback: CallbackQuery):
                 )
             )
         
-        # Редагуємо повідомлення головного меню, перетворюючи його на екран архіву
         await callback.message.edit_text(
             "\n".join(response_text), 
             reply_markup=get_archive_kb(user_id)
         )
+        # Оновлюємо ID головного повідомлення
+        await state.update_data(main_message_id=callback.message.message_id)
         await callback.answer()
         
     except SQLAlchemyError as e:

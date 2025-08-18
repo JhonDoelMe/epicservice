@@ -36,9 +36,9 @@ def _normalize_value(value: any, is_float: bool = True) -> float | str:
         return 0.0 if is_float else "0"
 
     s_value = str(value).replace(',', '.').strip()
-    # Видаляємо всі символи, крім цифр та однієї крапки
-    s_value = re.sub(r'[^\d.]', '', s_value)
-
+    # Дозволяємо знаку мінус бути на початку рядка
+    s_value = re.sub(r'[^0-9.-]', '', s_value)
+    
     try:
         return float(s_value) if is_float else s_value
     except (ValueError, TypeError):
@@ -67,6 +67,9 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> dict:
         }
         dataframe.rename(columns=lambda c: column_mapping.get(str(c).lower(), c), inplace=True)
 
+        # --- ВИПРАВЛЕННЯ: Використовуємо None як прапорець ---
+        has_months_column = "місяці_без_руху" in dataframe.columns
+
         file_articles_data = {}
         for _, row in dataframe.iterrows():
             if pd.notna(row["назва"]) and (article := _extract_article(row["назва"])):
@@ -81,12 +84,16 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> dict:
                 quantity_str = _normalize_value(row.get("кількість", "0"), is_float=False)
                 final_stock_sum = float(_normalize_value(quantity_str, is_float=True)) * price
 
+                months_value = None
+                if has_months_column:
+                    months_value = int(_normalize_value(row.get("місяці_без_руху", 0)))
+
                 file_articles_data[article] = {
                     "назва": str(row["назва"]).strip(),
                     "відділ": int(row["відділ"]),
                     "група": str(row.get("група", "")).strip(),
                     "кількість": quantity_str,
-                    "місяці_без_руху": int(_normalize_value(row.get("місяці_без_руху", -1))), # -1 як прапорець, що значення не було
+                    "місяці_без_руху": months_value,
                     "сума_залишку": final_stock_sum,
                     "ціна": price,
                     "активний": True
@@ -117,17 +124,15 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> dict:
                     if not existing_products[article].активний:
                         reactivated_count += 1
                     
-                    # Логіка збереження старої ціни
                     if file_articles_data[article]["ціна"] == 0.0 and existing_products[article].ціна > 0.0:
                         price = existing_products[article].ціна
                         file_articles_data[article]["ціна"] = price
                         quantity = float(_normalize_value(file_articles_data[article]["кількість"], is_float=True))
                         file_articles_data[article]["сума_залишку"] = quantity * price
                     
-                    # --- НОВИЙ БЛОК: Логіка збереження старих "місяців без руху" ---
-                    if file_articles_data[article]["місяці_без_руху"] == -1: # Якщо значення не було в файлі
+                    # --- ВИПРАВЛЕННЯ: Перевіряємо на None ---
+                    if file_articles_data[article]["місяці_без_руху"] is None:
                         file_articles_data[article]["місяці_без_руху"] = existing_products[article].місяці_без_руху
-                    # --- КІНЕЦЬ НОВОГО БЛОКУ ---
 
                     update_data = {"id": existing_products[article].id, "артикул": article, **file_articles_data[article]}
                     products_to_update_mappings.append(update_data)
@@ -137,6 +142,10 @@ def _sync_smart_import(dataframe: pd.DataFrame) -> dict:
                     updated_count = len(products_to_update_mappings)
 
             if articles_to_add:
+                # Встановлюємо 0, якщо місяці не були вказані
+                for article in articles_to_add:
+                    if file_articles_data[article]["місяці_без_руху"] is None:
+                        file_articles_data[article]["місяці_без_руху"] = 0
                 products_to_add_objects = [Product(артикул=article, **file_articles_data[article]) for article in articles_to_add]
                 if products_to_add_objects:
                     session.bulk_save_objects(products_to_add_objects)
