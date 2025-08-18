@@ -19,18 +19,15 @@ from handlers.admin import (archive_handlers as admin_archive,
 from handlers.user import (item_addition, list_editing, list_management,
                            list_saving)
 from middlewares.logging_middleware import LoggingMiddleware
-# --- ВИДАЛЕНО: Імпорт планувальника ---
-# from scheduler import setup_scheduler
 
 
+# --- ЗМІНА: Функція для видалення меню команд ---
 async def set_main_menu(bot: Bot):
     """
-    Встановлює головне меню (команди) для користувачів та адміністраторів.
+    Встановлює головне меню (команди) для бота.
+    Передача порожнього списку видаляє меню.
     """
-    main_menu_commands = [
-        BotCommand(command='/start', description='Перезапустити бота')
-    ]
-    await bot.set_my_commands(main_menu_commands)
+    await bot.set_my_commands([])
 
 
 async def main():
@@ -72,12 +69,6 @@ async def main():
 
     dp.update.middleware(LoggingMiddleware())
 
-    # --- ВИДАЛЕНО: Блок коду, що стосується планувальника ---
-    # scheduler = setup_scheduler(bot)
-    # scheduler.start()
-    # logger.info("Сервіс планувальника завдань успішно запущено.")
-    # --- КІНЕЦЬ ВИДАЛЕНОГО БЛОКУ ---
-
     # --- Реєстрація роутерів ---
     dp.include_router(error_handler.router)
     dp.include_router(admin_core.router)
@@ -103,10 +94,6 @@ async def main():
         logger.critical("Критична помилка під час роботи бота: %s", e, exc_info=True)
     finally:
         logger.info("Завершення роботи бота...")
-        # --- ВИДАЛЕНО: Зупинка планувальника ---
-        # if 'scheduler' in locals() and scheduler.running:
-        #     scheduler.shutdown()
-        #     logger.info("Планувальник завдань зупинено.")
         await bot.session.close()
         logger.info("Сесія бота закрита.")
 

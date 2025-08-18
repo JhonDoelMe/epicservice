@@ -6,7 +6,8 @@ from aiogram import Bot, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+# --- ЗМІНА: Додаємо імпорт ReplyKeyboardRemove ---
+from aiogram.types import Message, ReplyKeyboardRemove
 
 from config import ADMIN_IDS
 from database.orm import orm_upsert_user
@@ -26,7 +27,6 @@ async def clean_previous_keyboard(state: FSMContext, bot: Bot, chat_id: int):
     previous_message_id = data.get("main_message_id")
     if previous_message_id:
         try:
-            # --- ВИПРАВЛЕННЯ: Використовуємо іменовані аргументи ---
             await bot.edit_message_reply_markup(
                 chat_id=chat_id,
                 message_id=previous_message_id,
@@ -60,7 +60,14 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot):
             text = LEXICON.CMD_START_USER
             kb = get_user_main_kb()
 
-        sent_message = await message.answer(text, reply_markup=kb)
+        # --- ЗМІНА: Додаємо reply_markup=ReplyKeyboardRemove() ---
+        # Цей рядок гарантовано видалить будь-яку клавіатуру в полі вводу
+        sent_message = await message.answer(
+            text, 
+            reply_markup=kb, 
+            # Додаємо цей параметр для видалення старої клавіатури
+            reply_markup_remove=ReplyKeyboardRemove()
+        )
         
         await state.update_data(main_message_id=sent_message.message_id)
             
