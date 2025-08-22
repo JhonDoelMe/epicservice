@@ -9,14 +9,13 @@ import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-# --- ЗМІНА: Імпортуємо StorageKey ---
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import (CallbackQuery, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ADMIN_IDS
-from database.orm import (orm_get_all_products_sync, orm_get_all_users_sync,
+from database.orm import (orm_get_all_products_async, orm_get_all_users_async,
                           orm_get_users_with_active_lists, orm_smart_import)
 from handlers.admin.core import _show_admin_panel
 from keyboards.inline import (get_admin_lock_kb, get_admin_main_kb,
@@ -83,14 +82,13 @@ def _format_admin_report(result: dict) -> str:
 
 
 async def broadcast_import_update(bot: Bot, result: dict):
-    loop = asyncio.get_running_loop()
     try:
-        user_ids = await loop.run_in_executor(None, orm_get_all_users_sync)
+        user_ids = await orm_get_all_users_async()
         if not user_ids:
             logger.info("Користувачі для розсилки сповіщень про імпорт не знайдені.")
             return
 
-        all_products = await loop.run_in_executor(None, orm_get_all_products_sync)
+        all_products = await orm_get_all_products_async()
         total_sum = sum(p.сума_залишку for p in all_products if p.сума_залишку)
 
         summary_part = LEXICON.USER_IMPORT_NOTIFICATION_SUMMARY.format(
@@ -185,7 +183,6 @@ async def handle_lock_force_save(callback: CallbackQuery, state: FSMContext, bot
     data = await state.get_data()
     user_ids, action = data.get('locked_user_ids', []), data.get('action_to_perform')
     
-    # --- ВИПРАВЛЕНО: Створюємо коректний FSMContext для кожного користувача ---
     results = []
     for user_id in user_ids:
         user_state_key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)

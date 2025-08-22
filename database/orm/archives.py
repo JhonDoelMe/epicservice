@@ -9,79 +9,46 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from config import ARCHIVES_PATH
-from database.engine import async_session, sync_session
+# --- ЗМІНА: Видаляємо імпорт sync_session ---
+from database.engine import async_session
 from database.models import (Product, SavedList, SavedListItem)
-# Імпортуємо допоміжну функцію з нового модуля
 from database.orm.products import _extract_article
 
-# Налаштовуємо логер для цього модуля
 logger = logging.getLogger(__name__)
 
 
 # --- Асинхронні функції для роботи з архівами ---
 
-# ВИПРАВЛЕНО: Змінено порядок аргументів для відповідності конвенції
 async def orm_add_saved_list(session, user_id: int, file_name: str, file_path: str, items: list[dict]):
-    """
-    Додає інформацію про новий збережений список до бази даних.
-
-    Створює запис у `SavedList` та пов'язані з ним записи у `SavedListItem`.
-    Ця функція повинна виконуватися в межах існуючої транзакції.
-
-    Args:
-        session: Екземпляр асинхронної сесії SQLAlchemy.
-        user_id: ID користувача, що зберіг список.
-        file_name: Ім'я згенерованого Excel-файлу.
-        file_path: Повний шлях до згенерованого файлу.
-        items: Список словників з даними про товари для збереження.
-    """
+    """Додає інформацію про новий збережений список до бази даних."""
     new_list = SavedList(user_id=user_id, file_name=file_name, file_path=file_path)
     session.add(new_list)
-    await session.flush()  # Отримуємо ID для new_list
+    await session.flush()
 
     for item in items:
-        list_item = SavedListItem(
-            list_id=new_list.id,
-            article_name=item["article_name"],
-            quantity=item["quantity"],
-        )
+        list_item = SavedListItem(list_id=new_list.id, article_name=item["article_name"], quantity=item["quantity"])
         session.add(list_item)
 
 
 async def orm_update_reserved_quantity(session, items: list[dict]):
-    """
-    Оновлює кількість зарезервованих товарів (`відкладено`).
-    """
-    # для імпорту потрібна orm_get_product_by_id, але щоб уникнути
-    # циклічного імпорту, простіше реалізувати логіку тут
+    """Оновлює кількість зарезервованих товарів (`відкладено`)."""
     from database.orm.products import orm_get_product_by_id
-
     for item in items:
-        product = await orm_get_product_by_id(
-            session, item["product_id"], for_update=True
-        )
+        product = await orm_get_product_by_id(session, item["product_id"], for_update=True)
         if product:
             product.відкладено = (product.відкладено or 0) + item["quantity"]
 
 
 async def orm_get_user_lists_archive(user_id: int) -> list[SavedList]:
-    """
-    Отримує архів збережених списків для конкретного користувача.
-    """
+    """Отримує архів збережених списків для конкретного користувача."""
     async with async_session() as session:
-        query = (
-            select(SavedList)
-            .where(SavedList.user_id == user_id)
-            .order_by(SavedList.created_at.desc())
-        )
+        query = select(SavedList).where(SavedList.user_id == user_id).order_by(SavedList.created_at.desc())
         result = await session.execute(query)
         return result.scalars().all()
 
 
 async def orm_get_all_files_for_user(user_id: int) -> list[str]:
-    """
-    Отримує шляхи до всіх збережених файлів-списків для користувача.
-    """
+    """Отримує шляхи до всіх збережених файлів-списків для користувача."""
     async with async_session() as session:
         query = select(SavedList.file_path).where(SavedList.user_id == user_id)
         result = await session.execute(query)
@@ -89,28 +56,23 @@ async def orm_get_all_files_for_user(user_id: int) -> list[str]:
 
 
 async def orm_get_users_with_archives() -> list[tuple[int, int]]:
-    """
-    Отримує список користувачів, які мають хоча б один збережений список.
-    """
+    """Отримує список користувачів, які мають хоча б один збережений список."""
     async with async_session() as session:
-        query = (
-            select(SavedList.user_id, func.count(SavedList.id).label("lists_count"))
-            .group_by(SavedList.user_id)
-            .order_by(func.count(SavedList.id).desc())
-        )
+        query = select(SavedList.user_id, func.count(SavedList.id).label("lists_count")).group_by(SavedList.user_id).order_by(func.count(SavedList.id).desc())
         result = await session.execute(query)
         return result.all()
 
 
-# --- Синхронні функції для звітів та фонових завдань ---
+# --- ЗМІНА: Усі синхронні функції перероблено на асинхронні ---
 
-def orm_get_all_collected_items_sync() -> list[dict]:
-    """
-    Синхронно збирає зведені дані про всі товари у всіх збережених списках.
-    """
-    with sync_session() as session:
-        all_products = {p.артикул: p for p in session.execute(select(Product)).scalars()}
-        all_saved_items = session.execute(select(SavedListItem)).scalars().all()
+async def orm_get_all_collected_items_async() -> list[dict]:
+    """Асинхронно збирає зведені дані про всі товари у всіх збережених списках."""
+    async with async_session() as session:
+        products_result = await session.execute(select(Product))
+        all_products = {p.артикул: p for p in products_result.scalars()}
+        
+        saved_items_result = await session.execute(select(SavedListItem))
+        all_saved_items = saved_items_result.scalars().all()
 
         collected_data = {}
         for item in all_saved_items:
@@ -124,27 +86,24 @@ def orm_get_all_collected_items_sync() -> list[dict]:
                 collected_data[article]["quantity"] += item.quantity
             else:
                 collected_data[article] = {
-                    "department": product_info.відділ,
-                    "group": product_info.група,
-                    "name": product_info.назва,
-                    "quantity": item.quantity,
+                    "department": product_info.відділ, "group": product_info.група,
+                    "name": product_info.назва, "quantity": item.quantity,
                 }
         
         return list(collected_data.values())
 
 
-def orm_delete_all_saved_lists_sync() -> int:
-    """
-    Синхронно видаляє абсолютно всі збережені списки, їхні позиції та файли.
-    """
-    with sync_session() as session:
-        lists_count = session.execute(select(func.count(SavedList.id))).scalar_one()
+async def orm_delete_all_saved_lists_async() -> int:
+    """Асинхронно видаляє абсолютно всі збережені списки, їхні позиції та файли."""
+    async with async_session() as session:
+        lists_count_result = await session.execute(select(func.count(SavedList.id)))
+        lists_count = lists_count_result.scalar_one()
         if lists_count == 0:
             return 0
         
-        session.execute(delete(SavedListItem))
-        session.execute(delete(SavedList))
-        session.commit()
+        await session.execute(delete(SavedListItem))
+        await session.execute(delete(SavedList))
+        await session.commit()
         
         if os.path.exists(ARCHIVES_PATH):
             shutil.rmtree(ARCHIVES_PATH)
@@ -152,30 +111,23 @@ def orm_delete_all_saved_lists_sync() -> int:
         return lists_count
 
 
-def orm_get_users_for_warning_sync(hours_warn: int, hours_expire: int) -> set[int]:
-    """
-    Синхронно знаходить користувачів для попередження про видалення списків.
-    """
-    with sync_session() as session:
+async def orm_get_users_for_warning_async(hours_warn: int, hours_expire: int) -> set[int]:
+    """Асинхронно знаходить користувачів для попередження про видалення списків."""
+    async with async_session() as session:
         warn_time = datetime.now() - timedelta(hours=hours_warn)
         expire_time = datetime.now() - timedelta(hours=hours_expire)
-
-        query = (
-            select(SavedList.user_id)
-            .where(SavedList.created_at < warn_time, SavedList.created_at > expire_time)
-            .distinct()
-        )
-        return set(session.execute(query).scalars().all())
+        query = select(SavedList.user_id).where(SavedList.created_at < warn_time, SavedList.created_at > expire_time).distinct()
+        result = await session.execute(query)
+        return set(result.scalars().all())
 
 
-def orm_delete_lists_older_than_sync(hours: int) -> int:
-    """
-    Синхронно видаляє списки та файли, які старші за вказану кількість годин.
-    """
-    with sync_session() as session:
+async def orm_delete_lists_older_than_async(hours: int) -> int:
+    """Асинхронно видаляє списки та файли, які старші за вказану кількість годин."""
+    async with async_session() as session:
         expire_time = datetime.now() - timedelta(hours=hours)
         
-        lists_to_delete = session.execute(select(SavedList).where(SavedList.created_at < expire_time)).scalars().all()
+        lists_to_delete_result = await session.execute(select(SavedList).where(SavedList.created_at < expire_time))
+        lists_to_delete = lists_to_delete_result.scalars().all()
         
         if not lists_to_delete:
             return 0
@@ -191,10 +143,10 @@ def orm_delete_lists_older_than_sync(hours: int) -> int:
                     if not os.listdir(user_dir):
                         os.rmdir(user_dir)
                 except OSError as e:
-                    logger.error(f"Помилка видалення архівного файлу або папки {lst.file_path}: {e}")
+                    logger.error(f"Помилка видалення файлу {lst.file_path}: {e}")
 
-        session.execute(delete(SavedListItem).where(SavedListItem.list_id.in_(list_ids_to_delete)))
-        session.execute(delete(SavedList).where(SavedList.id.in_(list_ids_to_delete)))
-        session.commit()
+        await session.execute(delete(SavedListItem).where(SavedListItem.list_id.in_(list_ids_to_delete)))
+        await session.execute(delete(SavedList).where(SavedList.id.in_(list_ids_to_delete)))
+        await session.commit()
         
         return count

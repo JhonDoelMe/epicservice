@@ -11,16 +11,15 @@ import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-# --- ЗМІНА: Імпортуємо StorageKey ---
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import (CallbackQuery, FSInputFile, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 from sqlalchemy.exc import SQLAlchemyError
 
 from config import ADMIN_IDS, ARCHIVES_PATH
-from database.orm import (orm_get_all_collected_items_sync,
-                          orm_get_all_products_sync,
-                          orm_get_all_temp_list_items_sync,
+from database.orm import (orm_get_all_collected_items_async,
+                          orm_get_all_products_async,
+                          orm_get_all_temp_list_items_async,
                           orm_get_users_with_active_lists,
                           orm_subtract_collected)
 from handlers.admin.core import _show_admin_panel
@@ -42,10 +41,10 @@ class AdminReportStates(StatesGroup):
     lock_confirmation = State()
 
 
-def _create_stock_report_sync() -> Optional[str]:
+async def _create_stock_report_async() -> Optional[str]:
     try:
-        products = orm_get_all_products_sync()
-        temp_list_items = orm_get_all_temp_list_items_sync()
+        products = await orm_get_all_products_async()
+        temp_list_items = await orm_get_all_temp_list_items_async()
         
         temp_reservations = {}
         for item in temp_list_items:
@@ -74,7 +73,10 @@ def _create_stock_report_sync() -> Optional[str]:
         df = pd.DataFrame(report_data)
         os.makedirs(ARCHIVES_PATH, exist_ok=True)
         report_path = os.path.join(ARCHIVES_PATH, f"stock_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
-        df.to_excel(report_path, index=False)
+        
+        # Використовуємо to_thread для синхронної операції запису файлу
+        await asyncio.to_thread(df.to_excel, report_path, index=False)
+        
         return report_path
     except Exception as e:
         logger.error("Помилка створення звіту про залишки: %s", e, exc_info=True)
@@ -110,8 +112,7 @@ async def proceed_with_stock_export(callback: CallbackQuery, bot: Bot, state: FS
     await callback.answer(LEXICON.EXPORTING_STOCK)
     await callback.message.edit_text("Формую звіт по залишкам...", reply_markup=None)
     
-    loop = asyncio.get_running_loop()
-    report_path = await loop.run_in_executor(None, _create_stock_report_sync)
+    report_path = await _create_stock_report_async()
     
     await callback.message.delete()
 
@@ -134,9 +135,8 @@ async def proceed_with_collected_export(callback: CallbackQuery, bot: Bot, state
     await callback.answer(LEXICON.COLLECTED_REPORT_PROCESSING)
     await callback.message.edit_text("Формую зведений звіт...", reply_markup=None)
     
-    loop = asyncio.get_running_loop()
     try:
-        collected_items = await loop.run_in_executor(None, orm_get_all_collected_items_sync)
+        collected_items = await orm_get_all_collected_items_async()
         await callback.message.delete()
         
         if not collected_items:
@@ -149,7 +149,9 @@ async def proceed_with_collected_export(callback: CallbackQuery, bot: Bot, state
             )
             os.makedirs(ARCHIVES_PATH, exist_ok=True)
             report_path = os.path.join(ARCHIVES_PATH, f"collected_report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
-            df.to_excel(report_path, index=False)
+            
+            await asyncio.to_thread(df.to_excel, report_path, index=False)
+            
             await bot.send_document(
                 chat_id=callback.from_user.id,
                 document=FSInputFile(report_path),
@@ -206,7 +208,6 @@ async def handle_report_lock_force_save(callback: CallbackQuery, state: FSMConte
     data = await state.get_data()
     user_ids, action = data.get('locked_user_ids', []), data.get('action_to_perform')
     
-    # --- ВИПРАВЛЕНО: Створюємо коректний FSMContext для кожного користувача ---
     results = []
     for user_id in user_ids:
         user_state_key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)

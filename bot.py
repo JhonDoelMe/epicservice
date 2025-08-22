@@ -10,7 +10,8 @@ from aiogram.types import BotCommand
 from sqlalchemy import text
 
 from config import BOT_TOKEN
-from database.engine import async_session
+# --- ЗМІНА: Імпортуємо нову функцію ---
+from database.engine import async_session, create_tables
 from handlers import (archive, common, error_handler, user_search)
 from handlers.admin import (archive_handlers as admin_archive,
                             core as admin_core,
@@ -54,6 +55,8 @@ async def main():
         sys.exit(1)
 
     try:
+        # --- ЗМІНА: Додаємо виклик створення таблиць ---
+        await create_tables()
         async with async_session() as session:
             await session.execute(text('SELECT 1'))
         logger.info("Підключення до бази даних успішне.")

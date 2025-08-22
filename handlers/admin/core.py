@@ -11,8 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from config import ADMIN_IDS
-from database.orm import orm_delete_all_saved_lists_sync
-# --- ЗМІНА: Імпортуємо наш хелпер ---
+from database.orm import orm_delete_all_saved_lists_async
 from handlers.common import clean_previous_keyboard
 from keyboards.inline import get_admin_panel_kb, get_confirmation_kb
 from lexicon.lexicon import LEXICON
@@ -30,7 +29,6 @@ class AdminCoreStates(StatesGroup):
     confirm_delete_all_lists = State()
 
 
-# --- ОНОВЛЕНА ДОПОМІЖНА ФУНКЦІЯ ---
 async def _show_admin_panel(event: Union[Message, CallbackQuery], state: FSMContext, bot: Bot):
     """
     Відображає головне меню адмін-панелі, керуючи станом повідомлення.
@@ -100,8 +98,7 @@ async def delete_all_lists_confirmed_handler(callback: CallbackQuery, state: FSM
     """
     await state.set_state(None)
 
-    loop = asyncio.get_running_loop()
-    deleted_count = await loop.run_in_executor(None, orm_delete_all_saved_lists_sync)
+    deleted_count = await orm_delete_all_saved_lists_async()
 
     if deleted_count > 0:
         await callback.answer(
@@ -113,6 +110,3 @@ async def delete_all_lists_confirmed_handler(callback: CallbackQuery, state: FSM
 
     # Повертаємо адміна до головного меню
     await _show_admin_panel(callback, state, bot)
-
-
-# --- ВИДАЛЕНО ОБРОБНИК ДЛЯ "Ні", оскільки він тепер веде на "admin:main" ---
